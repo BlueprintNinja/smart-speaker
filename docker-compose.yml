@@ -1,0 +1,81 @@
+version: "3.9"
+
+networks:
+  speaker-net:
+    driver: bridge
+
+services:
+
+  # ── Home Assistant ────────────────────────────────────────────────────────────
+  # Uses host networking so HA can discover devices on your LAN (mDNS, Zigbee, etc.)
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ./ha-config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Smart Speaker Backend ──────────────────────────────────────────────────────
+  backend:
+    container_name: smart-speaker-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - speaker-net
+    ports:
+      - "8000:8000"
+    environment:
+      # Ollama runs natively on the host for GPU access — host.docker.internal reaches it
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3}
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_DTYPE=${WHISPER_DTYPE:-float16}
+      - PIPER_MODEL=${PIPER_MODEL:-models/en_US-joe-medium.onnx}
+      # HA runs on host network, so use host.docker.internal to reach it
+      - HA_URL=${HA_URL:-http://host.docker.internal:8123}
+      - HA_TOKEN=${HA_TOKEN:-}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ./backend/models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      homeassistant:
+        condition: service_healthy
+
+  # ── Frontend ──────────────────────────────────────────────────────────────────
+  frontend:
+    container_name: smart-speaker-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # In full-Docker mode the browser hits the nginx proxy path /api/
+        # which proxies to http://backend:8000 inside the container network.
+        # For local dev (npm run dev) VITE_API is still just http://localhost:8000.
+        VITE_API: ""
+    restart: unless-stopped
+    networks:
+      - speaker-net
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

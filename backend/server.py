@@ -1,0 +1,421 @@
+"""
+Smart Speaker - GPU Backend
+Runs locally on your GPU PC. Handles:
+ - STT: faster-whisper (GPU accelerated)
+ - LLM: Ollama with intent extraction for home/farm control
+ - TTS: Piper TTS
+ - Home Control: Home Assistant REST API
+"""
+import os
+import io
+import re
+import json
+import wave
+import base64
+import tempfile
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import httpx
+import uvicorn
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
+
+# ── Config ────────────────────────────────────────────────────────────────────
+OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    "http://localhost:11434")
+OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",   "llama3")
+WHISPER_MODEL  = os.getenv("WHISPER_MODEL",  "medium")
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
+WHISPER_DTYPE  = os.getenv("WHISPER_DTYPE",  "float16")
+PIPER_MODEL    = os.getenv("PIPER_MODEL",    "en_US-joe-medium.onnx")
+
+HA_URL   = os.getenv("HA_URL",   "http://localhost:8123")
+HA_TOKEN = os.getenv("HA_TOKEN", "")
+
+# ── System prompt ─────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are a helpful, concise home and farm voice assistant.
+
+When the user asks you to control a device, ALWAYS include a JSON command block
+in your response using exactly this format — nothing before or after the block:
+
+```json
+{"action": "<domain>.<service>", "entity_id": "<entity_id>", "extra": {}}
+```
+
+Valid actions include:
+  light.turn_on, light.turn_off, light.toggle
+  switch.turn_on, switch.turn_off, switch.toggle
+  cover.open_cover, cover.close_cover, cover.toggle
+  lock.lock, lock.unlock
+  climate.set_temperature  (extra: {"temperature": 72})
+  script.turn_on
+  automation.trigger
+  homeassistant.turn_on, homeassistant.turn_off  (for groups/scenes)
+
+For light brightness or color:
+  extra: {"brightness_pct": 80}  or  {"rgb_color": [255, 100, 0]}
+
+If you do NOT know the exact entity_id, use your best guess based on the device
+name the user mentioned and note it in your spoken reply.
+
+If the user is just chatting or asking a question (not controlling a device),
+do NOT include any JSON block. Give a short, natural spoken answer."""
+
+
+# ── Lifespan (replaces deprecated @app.on_event) ──────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_event_loop()
+    print("[startup] Warming up Whisper...")
+    await loop.run_in_executor(None, get_whisper)
+    print("[startup] Warming up Piper...")
+    await loop.run_in_executor(None, get_piper)
+    print("[startup] All models ready.")
+    yield
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app = FastAPI(title="Smart Speaker API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Lazy loaders ──────────────────────────────────────────────────────────────
+_whisper = None
+_piper   = None
+_ollama  = None
+
+
+def get_whisper():
+    global _whisper
+    if _whisper is None:
+        print(f"[whisper] Loading {WHISPER_MODEL} on {WHISPER_DEVICE}...")
+        from faster_whisper import WhisperModel
+        _whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_DTYPE)
+        print("[whisper] Ready.")
+    return _whisper
+
+
+def get_piper():
+    global _piper
+    if _piper is None:
+        if not Path(PIPER_MODEL).exists():
+            return None
+        print(f"[piper] Loading {PIPER_MODEL}...")
+        from piper.voice import PiperVoice
+        _piper = PiperVoice.load(PIPER_MODEL)
+        print("[piper] Ready.")
+    return _piper
+
+
+def get_ollama():
+    global _ollama
+    if _ollama is None:
+        from ollama import Client
+        _ollama = Client(host=OLLAMA_HOST)
+    return _ollama
+
+
+# ── Conversation history ───────────────────────────────────────────────────────
+conversation: list[dict] = []
+
+
+# ── Home Assistant helpers ─────────────────────────────────────────────────────
+def _ha_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {HA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+
+async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict = None) -> dict:
+    """Call a Home Assistant service. Returns HA response or an error dict."""
+    if not HA_TOKEN:
+        return {"error": "HA_TOKEN not configured"}
+
+    payload = {"entity_id": entity_id}
+    if extra:
+        payload.update(extra)
+
+    url = f"{HA_URL}/api/services/{domain}/{service}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=_ha_headers(), json=payload)
+            r.raise_for_status()
+            return {"ok": True, "status": r.status_code}
+    except httpx.HTTPStatusError as e:
+        return {"error": f"HA returned {e.response.status_code}: {e.response.text}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+async def ha_get_state(entity_id: str) -> dict:
+    """Fetch the current state of a HA entity."""
+    if not HA_TOKEN:
+        return {"error": "HA_TOKEN not configured"}
+
+    url = f"{HA_URL}/api/states/{entity_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=_ha_headers())
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"HA returned {e.response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+async def ha_list_entities(domain: str = None) -> list[dict]:
+    """List all HA states, optionally filtered by domain."""
+    if not HA_TOKEN:
+        return []
+
+    url = f"{HA_URL}/api/states"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, headers=_ha_headers())
+            r.raise_for_status()
+            states = r.json()
+            if domain:
+                states = [s for s in states if s["entity_id"].startswith(f"{domain}.")]
+            return states
+    except Exception:
+        return []
+
+
+def extract_ha_command(llm_response: str) -> dict | None:
+    """
+    Parse the JSON command block the LLM embeds in its reply.
+    Returns the parsed dict or None if no command was found.
+    """
+    match = re.search(r"```json\s*(\{.*?\})\s*```", llm_response, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+
+
+def strip_command_block(text: str) -> str:
+    """Remove the embedded JSON block from the spoken reply."""
+    return re.sub(r"```json\s*\{.*?\}\s*```", "", text, flags=re.DOTALL).strip()
+
+
+# ── WAV synthesis helper ───────────────────────────────────────────────────────
+def synth_wav_bytes(text: str) -> tuple[bytes, int]:
+    """Synthesize WAV bytes with Piper. Returns (wav_bytes, sample_rate)."""
+    piper = get_piper()
+    if piper is None:
+        raise FileNotFoundError(f"Piper model '{PIPER_MODEL}' not found.")
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(piper.config.sample_rate)
+        piper.synthesize(text, wf)
+
+    return buf.getvalue(), piper.config.sample_rate
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    piper_ok = Path(PIPER_MODEL).exists()
+    try:
+        get_ollama().list()
+        ollama_ok = True
+    except Exception:
+        ollama_ok = False
+
+    ha_ok = False
+    if HA_TOKEN:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{HA_URL}/api/", headers=_ha_headers())
+                ha_ok = r.status_code == 200
+        except Exception:
+            pass
+
+    gpu_info = {}
+    try:
+        import torch
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            gpu_info = {
+                "name": props.name,
+                "vram_total": f"{props.total_memory / 1e9:.1f} GB",
+                "vram_free": f"{(props.total_memory - torch.cuda.memory_allocated(0)) / 1e9:.1f} GB",
+            }
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "ollama_model": OLLAMA_MODEL,
+        "ollama_ok": ollama_ok,
+        "whisper_model": WHISPER_MODEL,
+        "whisper_device": WHISPER_DEVICE,
+        "piper_model": PIPER_MODEL,
+        "piper_ok": piper_ok,
+        "ha_url": HA_URL,
+        "ha_ok": ha_ok,
+        "gpu": gpu_info,
+    }
+
+
+@app.post("/transcribe")
+async def transcribe(audio: UploadFile = File(...)):
+    data = await audio.read()
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        loop = asyncio.get_event_loop()
+
+        def _transcribe():
+            segments, _ = get_whisper().transcribe(
+                tmp_path,
+                beam_size=5,
+                language="en",
+                condition_on_previous_text=False,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 500},
+            )
+            return "".join(s.text for s in segments).strip()
+
+        text = await loop.run_in_executor(None, _transcribe)
+        return {"text": text}
+    finally:
+        os.unlink(tmp_path)
+
+
+@app.post("/chat")
+async def chat(body: dict):
+    user_msg = body.get("message", "").strip()
+    if not user_msg:
+        return JSONResponse({"reply": "I didn't catch that."})
+
+    conversation.append({"role": "user", "content": user_msg})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation
+    ol = get_ollama()
+
+    async def generate():
+        full = ""
+        ha_result = None
+
+        try:
+            for chunk in ol.chat(model=OLLAMA_MODEL, messages=messages, stream=True):
+                token = chunk["message"]["content"]
+                full += token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        # ── Execute any embedded HA command ───────────────────────────────────
+        cmd = extract_ha_command(full)
+        if cmd:
+            try:
+                domain, service = cmd["action"].split(".", 1)
+                ha_result = await ha_call_service(
+                    domain, service,
+                    cmd.get("entity_id", ""),
+                    cmd.get("extra") or {},
+                )
+            except Exception as e:
+                ha_result = {"error": str(e)}
+
+            yield f"data: {json.dumps({'event': 'ha_result', 'result': ha_result})}\n\n"
+
+        spoken = strip_command_block(full)
+        conversation.append({"role": "assistant", "content": spoken})
+        yield f"data: {json.dumps({'done': True, 'full': spoken})}\n\n"
+
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+    return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
+
+
+@app.post("/tts_audio")
+async def tts_audio(body: dict):
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "no text"}, status_code=400)
+
+    loop = asyncio.get_event_loop()
+
+    def _synth():
+        return synth_wav_bytes(text)
+
+    try:
+        wav_bytes, sr = await loop.run_in_executor(None, _synth)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": f"TTS failed: {e}"}, status_code=500)
+
+    headers = {"Cache-Control": "no-store", "X-Sample-Rate": str(sr)}
+    return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav", headers=headers)
+
+
+@app.post("/tts")
+async def tts(body: dict):
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "no text"}, status_code=400)
+
+    loop = asyncio.get_event_loop()
+    try:
+        wav_bytes, sr = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": f"TTS failed: {e}"}, status_code=500)
+
+    return {"audio_b64": base64.b64encode(wav_bytes).decode(), "sample_rate": sr}
+
+
+# ── Home Assistant passthrough routes ─────────────────────────────────────────
+@app.get("/ha/entities")
+async def ha_entities(domain: str = None):
+    """List HA entities so the frontend can display what's available."""
+    entities = await ha_list_entities(domain)
+    return {"entities": [
+        {"entity_id": e["entity_id"], "state": e["state"],
+         "name": e.get("attributes", {}).get("friendly_name", e["entity_id"])}
+        for e in entities
+    ]}
+
+
+@app.get("/ha/state/{entity_id:path}")
+async def ha_state(entity_id: str):
+    """Get the current state of a single HA entity."""
+    return await ha_get_state(entity_id)
+
+
+@app.post("/ha/service")
+async def ha_service(body: dict):
+    """Directly call a HA service from the frontend (for manual UI controls)."""
+    domain, service = body.get("action", ".").split(".", 1)
+    return await ha_call_service(
+        domain, service,
+        body.get("entity_id", ""),
+        body.get("extra") or {},
+    )
+
+
+@app.delete("/conversation")
+async def clear_conversation():
+    conversation.clear()
+    return {"status": "cleared"}
+
+
+if __name__ == "__main__":
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
