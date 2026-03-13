@@ -104,6 +104,120 @@ Build a visual map of your devices before they're physically wired up:
 
 ---
 
+## Troubleshooting: Sky Not Speaking (Kokoro/TTS)
+
+If you see `CustomAlbert requires the PyTorch library` in backend logs, the Docker image has a cached numpy 2.x layer that breaks PyTorch. The fix is a **forced clean rebuild** — this re-downloads PyTorch (~2.4 GB) but only needs to happen once:
+
+```powershell
+cd C:\Users\mrray\smart-speaker
+docker compose down backend
+docker rmi smart-speaker-backend:latest --force
+docker compose build --no-cache backend
+docker compose up -d backend
+```
+
+Watch progress:
+```powershell
+docker compose logs -f backend
+```
+
+Once you see `[startup] Kokoro ready.` — Sky's voice is working.
+
+---
+
+## RainPoint BLE Soil Moisture Sensor
+
+The **RainPoint Bluetooth Soil Moisture & Temperature Meter** bridges into Home Assistant via an ESP32 Bluetooth Proxy. This solves the Docker-on-Windows Bluetooth limitation (Docker containers can't access the host's Bluetooth adapter).
+
+### What's Already Set Up
+
+All HA config files are in `ha-packages/` and auto-mounted into the HA container:
+
+- **`ha-packages/rainpoint.yaml`** — template sensors, dry/wet threshold sliders, automations (dry alert, wet alert, offline alert)
+- **`ha-packages/esphome-ble-proxy.yaml`** — flash this to a $5 ESP32 to bridge BLE → WiFi
+
+### Step 1 — Activate Packages in HA (one-time)
+
+Run this in PowerShell to add the packages include to your HA config:
+
+```powershell
+$haConfig = "C:\Users\mrray\smart-speaker\ha-config\configuration.yaml"
+$existing = Get-Content $haConfig -Raw
+if ($existing -notmatch "packages") {
+  Add-Content $haConfig "`nhomeassistant:`n  packages: !include_dir_named packages"
+  Write-Host "Added packages include"
+} else { Write-Host "Already configured" }
+```
+
+Then restart HA: **http://localhost:8123 → Settings → System → Restart**
+
+After restart you'll see these new entities in HA:
+- `input_number.rainpoint_dry_threshold` (default 25%)
+- `input_number.rainpoint_wet_threshold` (default 75%)
+- `sensor.soil_moisture_status` (DRY / OK / WET)
+- Three automations armed and waiting for the sensor
+
+### Step 2 — Get an ESP32 (~$5–10)
+
+Any ESP32-WROOM-32 dev board works. Search "ESP32 development board" on Amazon. Plug it in via USB to your PC for the initial flash, then move it to a USB outlet near the garden.
+
+### Step 3 — Flash the ESP32
+
+```powershell
+# Install ESPHome
+pip install esphome
+
+# Edit WiFi credentials first
+notepad ha-packages\esphome-ble-proxy.yaml
+# Change: ssid: "YOUR_WIFI_SSID" and password: "YOUR_WIFI_PASSWORD"
+
+# Generate a random API key (run this, copy the output)
+python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+# Paste it into ha-packages\esphome_secrets.yaml as esphome_api_key
+
+# Flash (ESP32 connected via USB)
+esphome run ha-packages\esphome-ble-proxy.yaml
+```
+
+First flash takes ~2 min. After that it updates OTA over WiFi — no USB needed.
+
+### Step 4 — Pair in Home Assistant
+
+1. Unplug ESP32 from PC, plug into USB power outlet **within 30ft of the RainPoint sensor**
+2. In HA: **Settings → Integrations → ESPHome** — the proxy appears automatically
+3. Then: **Settings → Integrations → Bluetooth** — RainPoint BLE device appears
+4. Click **Configure** to pair
+
+### Step 5 — Update Entity IDs
+
+Once paired, HA assigns real entity IDs (e.g. `sensor.rainpoint_soil_moisture`). If they differ from the defaults, update them in `ha-packages/rainpoint.yaml`:
+
+```yaml
+# Find your real entity IDs at:
+# http://localhost:8123 → Developer Tools → States → search "rainpoint"
+```
+
+### Sensor Notes
+
+- **Update rate:** every 2 seconds when ESP32 is in range
+- **IP54 rated:** splash-proof, not submersible — keep the head elevated so water doesn't pool around the button
+- **Battery:** CR2032, typically 6–12 months
+- **Range:** 30ft direct, 60ft+ with ESP32 proxy relaying over WiFi
+- **HA Dashboard card:** see comment block at bottom of `ha-packages/rainpoint.yaml`
+
+---
+
+## Farm Intelligence (Sky's Proactive Alerts)
+
+Sky monitors Ray's Berry Farm automatically and speaks up when something needs attention:
+
+- **Every 10 minutes:** Farm data (Open-Meteo + NWS) is fetched and injected into the LLM's memory so Sky always knows the current GDD, growth stage, and active risks
+- **Critical alerts:** If frost risk, SWD pressure, or NWS alerts are detected, Sky generates and speaks a briefing immediately on page load
+- **Every 60 minutes:** Sky gives an unprompted spoken farm update
+- **Dashboard tab:** Live farm insights panel shows color-coded cards (critical/warning/positive/info)
+
+---
+
 ## Entity IDs
 
 To find the correct `entity_id` for your devices:
@@ -160,6 +274,21 @@ FastAPI Backend (Docker, port 8000)
 | `WHISPER_DTYPE` | `float16` | `float16` (GPU) or `int8` (CPU) |
 | `KOKORO_VOICE` | `af_sky` | Kokoro voice ID — auto-downloaded on first run |
 | `GPU_CONCURRENCY` | `1` | Max simultaneous GPU tasks (Whisper + TTS share this lock) |
-| `HA_URL` | `http://host.docker.internal:8123` | Home Assistant URL |
+| `HA_URL` | `http://homeassistant:8123` | Home Assistant URL (container name on bridge network) |
 | `HA_TOKEN` | *(required for device control)* | HA long-lived access token |
 | `TZ` | `America/New_York` | Timezone |
+
+---
+
+## Node Canvas
+
+The playground lets you map out devices visually before or after physical integration.
+
+**Available node types:**
+- 💡 **Light** — HA light entities, brightness/color control
+- 📷 **Camera** — snapshot, motion detection
+- 💧 **Tensiometer** — soil moisture sensor with kPa threshold
+- 🌊 **Irrigation** — valve switches with duration
+- 🌱 **RainPoint BLE** — Bluetooth soil moisture/temp with ESP32 proxy integration notes
+
+Nodes and connections **persist across page refreshes** via localStorage.
