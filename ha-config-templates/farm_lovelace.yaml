@@ -4,6 +4,23 @@ views:
     icon: mdi:sprout
     path: farm
     cards:
+      - type: weather-forecast
+        entity: weather.forecast_home
+        forecast_type: daily
+        name: Jersey County Forecast
+
+      - type: area
+        area: living_room
+        show_camera: false
+
+      - type: area
+        area: kitchen
+        show_camera: false
+
+      - type: area
+        area: bedroom
+        show_camera: false
+
       - type: entities
         title: Growth & Season
         icon: mdi:sprout

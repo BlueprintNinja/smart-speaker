@@ -27,13 +27,9 @@ homeassistant:
     Write-Host "PATCHED: Added packages include to configuration.yaml" -ForegroundColor Green
 }
 
-# --- Patch 2: farm_lovelace.yaml ---
-if (Test-Path $lovelaceDst) {
-    Write-Host "OK: farm_lovelace.yaml already exists in ha-config" -ForegroundColor Green
-} else {
-    Copy-Item $lovelaceSrc $lovelaceDst
-    Write-Host "PATCHED: Copied farm_lovelace.yaml to ha-config" -ForegroundColor Green
-}
+# --- Patch 2: farm_lovelace.yaml (always overwrite to pick up template updates) ---
+Copy-Item $lovelaceSrc $lovelaceDst -Force
+Write-Host "PATCHED: Copied farm_lovelace.yaml to ha-config" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Restart Home Assistant to apply all changes:" -ForegroundColor Yellow
