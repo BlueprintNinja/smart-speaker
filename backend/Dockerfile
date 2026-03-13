@@ -7,8 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-dev python3-pip \
     ffmpeg curl \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && python3 -m pip install --upgrade pip
 
 # Install PyTorch with CUDA 11.8 — supports sm_61 (GTX 1070) through sm_90
 RUN pip install --no-cache-dir \
@@ -16,7 +17,8 @@ RUN pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu118
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir numpy && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
