@@ -698,6 +698,90 @@ async def debug():
     return result
 
 
+@app.post("/farm/ask")
+async def farm_ask(body: dict):
+    """
+    Accept a question + live farm context from the berry sim and stream an LLM answer.
+    Body: { question: str, context: { weather, soil, insights, gdd, chillHours, alerts } }
+    """
+    question = (body.get("question") or "").strip()
+    ctx = body.get("context") or {}
+    if not question:
+        return JSONResponse({"error": "no question"}, status_code=400)
+
+    # Build a rich farm-aware system prompt
+    weather = ctx.get("weather") or {}
+    soil = ctx.get("soil") or {}
+    insights = ctx.get("insights") or []
+    gdd = ctx.get("gdd", 0)
+    chill = ctx.get("chillHours", 0)
+    alerts = ctx.get("alerts") or []
+    stage = ctx.get("growthStage", "Unknown")
+
+    current = weather.get("current") or {}
+    daily = weather.get("daily") or {}
+
+    farm_prompt = f"""You are Sky, an expert AI farm advisor for Ray's Jersey Berry Farm in Jersey County, Illinois.
+The farm grows Triple Crown and Chester blackberries (0.2 acres in production).
+
+CURRENT FARM STATUS ({ctx.get('timestamp', 'now')}):
+- Growth Stage: {stage}
+- Accumulated GDD (base 50°F since Mar 1): {gdd:.1f}
+- Chill Hours accumulated (since Sep 1): {chill}
+- Temperature: {current.get('temp', '?')}°F
+- Humidity: {current.get('humidity', '?')}%
+- Wind: {current.get('windSpeed', '?')} mph (gusts {current.get('windGusts', '?')} mph)
+- Precipitation (current hr): {current.get('precipitation', 0)}" 
+- UV Index: {current.get('uvIndex', '?')}
+- VPD: {current.get('vpd', '?')} kPa
+- Solar Radiation: {current.get('solarRad', '?')} W/m²
+- Soil Moisture (0-7cm): {current.get('soilMoisture', '?')}
+- Soil Temperature (18cm): {current.get('soilTemp', '?')}°F
+
+SOIL PROFILE:
+- Type: {soil.get('compName', '?')}
+- Drainage: {soil.get('drainageClass', '?')}
+- Sand: {soil.get('sandPercent', '?')}% / Clay: {soil.get('clayPercent', '?')}%
+- Field Capacity (AWC): {soil.get('fieldCapacity', '?')} in/in
+
+ACTIVE NWS ALERTS: {len(alerts)} alert(s)
+{chr(10).join(f"- [{a.get('severity','?')}] {a.get('event','?')}: {a.get('headline','')}" for a in alerts) if alerts else "None"}
+
+AI-GENERATED INSIGHTS ({len(insights)} total):
+{chr(10).join(f"- [{i.get('severity','?').upper()}] {i.get('title','?')}: {i.get('summary','')}" for i in insights[:10]) if insights else "None"}
+
+GDD CROP MILESTONES (Triple Crown blackberry):
+- Bud Break: 100 GDD | Vegetative: 200 | Flowering: 350 | Green Fruit: 550 | Ripening: 750 | Harvest Ready: 900
+
+Answer questions about the farm with specific, actionable advice. Reference actual values from the data above.
+When asked about predictions, use the GDD accumulation and growth stage to give precise estimates.
+Keep responses concise and practical for a working farmer. You may also control Home Assistant devices on the farm.
+"""
+
+    messages = [
+        {"role": "system", "content": farm_prompt},
+        {"role": "user", "content": question},
+    ]
+
+    async def generate():
+        loop = asyncio.get_event_loop()
+        try:
+            def _stream():
+                return list(_ollama_chat_stream(messages, {"temperature": 0.5}))
+            tokens = await loop.run_in_executor(None, _stream)
+            if not tokens:
+                yield f"data: {json.dumps({'token': '[No response from LLM]'})}\n\n"
+            else:
+                for token in tokens:
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'token': f'[Error: {e}]'})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+    return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
+
+
 @app.delete("/conversation")
 async def clear_conversation():
     conversation.clear()
