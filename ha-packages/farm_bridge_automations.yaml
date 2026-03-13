@@ -1,14 +1,10 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Farm Bridge Automations — Ray's Berry Farm
-# These fire on the virtual sensors pushed by farm-bridge/farm_bridge.py
-# All sensor.farm_* entities are updated every 10 minutes by the bridge.
-# ─────────────────────────────────────────────────────────────────────────────
+# Farm Bridge Automations - Ray's Berry Farm
+# Fires on sensor.farm_* entities pushed by farm-bridge every 10 minutes.
 
 automation:
 
-  # ── Frost risk alert ──────────────────────────────────────────────────────────
   - id: farm_bridge_frost_alert
-    alias: "Farm — Frost Risk Detected (Bridge)"
+    alias: "Farm - Frost Risk Detected"
     trigger:
       - platform: state
         entity_id: sensor.farm_frost_risk
@@ -19,12 +15,7 @@ automation:
     action:
       - service: persistent_notification.create
         data:
-          title: >
-            {% if states('sensor.farm_frost_risk') == 'critical' %}
-            🚨 CRITICAL Frost Risk — {{ states('sensor.farm_growth_stage') }}
-            {% else %}
-            ⚠️ Frost Risk — {{ states('sensor.farm_growth_stage') }}
-            {% endif %}
+          title: "Frost Risk - {{ states('sensor.farm_growth_stage') }}"
           message: >
             Frost forecast during {{ states('sensor.farm_growth_stage') }} stage.
             GDD: {{ states('sensor.farm_gdd') }}.
@@ -32,9 +23,8 @@ automation:
           notification_id: farm_frost
     mode: single
 
-  # ── Fungal risk spike ─────────────────────────────────────────────────────────
   - id: farm_bridge_fungal_alert
-    alias: "Farm — High Fungal Risk (Bridge)"
+    alias: "Farm - High Fungal Risk"
     trigger:
       - platform: numeric_state
         entity_id: sensor.farm_fungal_risk
@@ -44,18 +34,16 @@ automation:
     action:
       - service: persistent_notification.create
         data:
-          title: "🍄 High Fungal Disease Risk"
+          title: "High Fungal Disease Risk"
           message: >
             Fungal risk score: {{ states('sensor.farm_fungal_risk') }}/100.
             Spray window is {{ states('sensor.farm_spray_window') }}.
             Growth stage: {{ states('sensor.farm_growth_stage') }}.
-            Apply protectant fungicide during next available spray window.
           notification_id: farm_fungal
     mode: single
 
-  # ── Spray window just opened ──────────────────────────────────────────────────
   - id: farm_bridge_spray_open
-    alias: "Farm — Spray Window Opened (Bridge)"
+    alias: "Farm - Spray Window Opened"
     trigger:
       - platform: state
         entity_id: sensor.farm_spray_window
@@ -67,17 +55,15 @@ automation:
     action:
       - service: persistent_notification.create
         data:
-          title: "✅ Spray Window Open"
+          title: "Spray Window Open"
           message: >
             Conditions suitable for application.
             Fungal risk is {{ states('sensor.farm_fungal_risk') }}/100.
-            Apply fungicide or IPM treatment now (6–10 AM ideal).
           notification_id: farm_spray_open
     mode: single
 
-  # ── High yield threat ────────────────────────────────────────────────────────
   - id: farm_bridge_yield_threat
-    alias: "Farm — High Yield Threat Score (Bridge)"
+    alias: "Farm - High Yield Threat Score"
     trigger:
       - platform: numeric_state
         entity_id: sensor.farm_yield_threat
@@ -87,19 +73,17 @@ automation:
     action:
       - service: persistent_notification.create
         data:
-          title: "⚠️ Elevated Yield Threat"
+          title: "Elevated Yield Threat"
           message: >
             Composite yield threat score: {{ states('sensor.farm_yield_threat') }}/100.
             Stage: {{ states('sensor.farm_growth_stage') }}.
             SWD: {{ states('sensor.farm_swd_risk') }}.
             Frost risk: {{ states('sensor.farm_frost_risk') }}.
-            Review individual risk factors and take action.
           notification_id: farm_yield_threat
     mode: single
 
-  # ── NWS alert fired ──────────────────────────────────────────────────────────
   - id: farm_bridge_nws_alert
-    alias: "Farm — NWS Alert Active (Bridge)"
+    alias: "Farm - NWS Alert Active"
     trigger:
       - platform: numeric_state
         entity_id: sensor.farm_nws_alerts
@@ -107,16 +91,14 @@ automation:
     action:
       - service: persistent_notification.create
         data:
-          title: "📡 NWS Weather Alert"
+          title: "NWS Weather Alert"
           message: >
             {{ states('sensor.farm_nws_alerts') }} active NWS alert(s) for Jersey County.
-            Check http://localhost:8123 for details.
           notification_id: farm_nws
     mode: single
 
-  # ── Harvest window opened ────────────────────────────────────────────────────
   - id: farm_bridge_harvest_ready
-    alias: "Farm — Harvest Window Open (Bridge)"
+    alias: "Farm - Harvest Window Open"
     trigger:
       - platform: state
         entity_id: sensor.farm_growth_stage
@@ -124,11 +106,9 @@ automation:
     action:
       - service: persistent_notification.create
         data:
-          title: "🍇 Harvest Window Open!"
+          title: "Harvest Window Open"
           message: >
-            GDD threshold reached — {{ states('sensor.farm_gdd') }} GDD accumulated.
-            Begin scouting for ripe fruit.
+            GDD threshold reached - {{ states('sensor.farm_gdd') }} GDD accumulated.
             SWD pressure: {{ states('sensor.farm_swd_risk') }}.
-            Harvest ripe clusters before SWD peak.
           notification_id: farm_harvest_ready
     mode: single
