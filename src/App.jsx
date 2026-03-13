@@ -144,7 +144,8 @@ export default function App() {
   const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
-  const [activeTab, setActiveTab] = useState("chat"); // chat | canvas | dashboard
+  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard
+  const [showCanvas, setShowCanvas] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
 
   const mediaRecorderRef = useRef(null);
@@ -320,7 +321,6 @@ export default function App() {
           <div className="tab-nav">
             <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬 Chat</button>
             <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞ Dashboard</button>
-            <button className={`tab-btn${activeTab === 'canvas' ? ' active' : ''}`} onClick={() => setActiveTab('canvas')}>⬡ Nodes</button>
           </div>
           <div style={{ padding: '1.5rem' }}>
             <div className="sidebar-stat">
@@ -344,71 +344,89 @@ export default function App() {
         </aside>
 
         {/* ── Main View ── */}
-        <div className="main-view">
-          {activeTab === 'canvas' ? (
-            <NodeCanvas api={API} lastHaEvent={lastHaEvent} />
-          ) : activeTab === 'dashboard' ? (
+        <div className="main-view" style={{ flexDirection: 'row' }}>
+
+          {activeTab === 'dashboard' ? (
             <Dashboard api={API} />
           ) : (
             <>
-              <div className="chat-history">
-                {messages.length === 0 ? (
-                  <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.4 }}>
-                    <p>Awaiting your command...</p>
-                  </div>
-                ) : (
-                  messages.map((msg, i) => (
-                    <div key={i} className={`msg ${msg.role}`}>
-                      <div className="msg-meta">{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</div>
-                      <div className="bubble">
-                        {msg.text || "..."}
-                        {msg.role === 'bot' && msg.haResult && (
-                          <div className={`ha-action ${msg.haResult.ok ? 'ok' : 'err'}`}>
-                            {msg.haResult.ok ? '✓ Device command sent' : `✗ ${msg.haResult.error}`}
-                          </div>
-                        )}
-                        {msg.role === 'bot' && i < messages.length - 1 && (
-                          <button className="tts-btn" onClick={() => playTTS(msg.text)}>
-                            ▶ REPLAY AUDIO
-                          </button>
-                        )}
-                      </div>
+              {/* ── Chat panel ── */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: showCanvas ? '1px solid var(--navy-700)' : 'none' }}>
+                <div className="chat-history">
+                  {messages.length === 0 ? (
+                    <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.4 }}>
+                      <p>Awaiting your command...</p>
                     </div>
-                  ))
-                )}
-                <div ref={bottomRef} />
+                  ) : (
+                    messages.map((msg, i) => (
+                      <div key={i} className={`msg ${msg.role}`}>
+                        <div className="msg-meta">{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</div>
+                        <div className="bubble">
+                          {msg.text || "..."}
+                          {msg.role === 'bot' && msg.haResult && (
+                            <div className={`ha-action ${msg.haResult.ok ? 'ok' : 'err'}`}>
+                              {msg.haResult.ok ? '✓ Device command sent' : `✗ ${msg.haResult.error}`}
+                            </div>
+                          )}
+                          {msg.role === 'bot' && i < messages.length - 1 && (
+                            <button className="tts-btn" onClick={() => playTTS(msg.text)}>
+                              ▶ REPLAY AUDIO
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={bottomRef} />
+                </div>
+
+                <div className="input-zone">
+                  <div className="orb-row">
+                    <button
+                      className={`orb-btn ${orbState}`}
+                      onMouseDown={startListening}
+                      onMouseUp={stopListening}
+                      onTouchStart={startListening}
+                      onTouchEnd={stopListening}
+                    >
+                      <div style={{ width: '30%', height: '30%', border: '2px solid white', borderRadius: '50%' }} />
+                    </button>
+                    <span style={{ fontSize: '0.65rem', marginTop: '0.5rem', color: 'var(--navy-400)', fontWeight: 'bold' }}>
+                      {orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
+                    </span>
+                  </div>
+                  <div className="text-row">
+                    <textarea
+                      className="text-input"
+                      rows={1}
+                      placeholder="Enter command or manual query..."
+                      value={input}
+                      onChange={e => setInput(e.target.value)}
+                      onKeyDown={handleKey}
+                      disabled={loading}
+                    />
+                    <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
+                      SEND
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                    <button
+                      className="tts-btn"
+                      onClick={() => setShowCanvas(v => !v)}
+                      style={{ background: showCanvas ? 'rgba(245,158,11,0.15)' : '', borderColor: showCanvas ? 'var(--amber-500)' : '', color: showCanvas ? 'var(--amber-400)' : '' }}
+                    >
+                      ⬡ {showCanvas ? 'HIDE NODES' : 'SHOW NODES'}
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              <div className="input-zone">
-                <div className="orb-row">
-                  <button
-                    className={`orb-btn ${orbState}`}
-                    onMouseDown={startListening}
-                    onMouseUp={stopListening}
-                    onTouchStart={startListening}
-                    onTouchEnd={stopListening}
-                  >
-                    <div style={{ width: '30%', height: '30%', border: '2px solid white', borderRadius: '50%' }} />
-                  </button>
-                  <span style={{ fontSize: '0.65rem', marginTop: '0.5rem', color: 'var(--navy-400)', fontWeight: 'bold' }}>
-                    {orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
-                  </span>
+              {/* ── Node canvas panel (slide in alongside chat) ── */}
+              {showCanvas && (
+                <div style={{ width: '55%', flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <NodeCanvas api={API} lastHaEvent={lastHaEvent} />
                 </div>
-                <div className="text-row">
-                  <textarea
-                    className="text-input"
-                    rows={1}
-                    placeholder="Enter command or manual query..."
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
-                    onKeyDown={handleKey}
-                    disabled={loading}
-                  />
-                  <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
-                    SEND
-                  </button>
-                </div>
-              </div>
+              )}
             </>
           )}
         </div>
