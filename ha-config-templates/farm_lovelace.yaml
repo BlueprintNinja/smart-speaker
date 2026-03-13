@@ -1,0 +1,50 @@
+title: Farm
+views:
+  - title: Ray's Berry Farm
+    icon: mdi:sprout
+    path: farm
+    cards:
+      - type: entities
+        title: Growth & Season
+        icon: mdi:sprout
+        entities:
+          - entity: sensor.farm_growth_stage
+            name: Growth Stage
+          - entity: sensor.farm_gdd
+            name: GDD Accumulated
+          - entity: sensor.farm_days_to_harvest
+            name: Days to Harvest
+          - entity: sensor.farm_chill_hours
+            name: Chill Hours
+          - entity: sensor.farm_chill_pct
+            name: Chill Hours %
+
+      - type: entities
+        title: Risk Assessment
+        icon: mdi:alert-circle
+        entities:
+          - entity: sensor.farm_yield_threat
+            name: Yield Threat Score
+          - entity: sensor.farm_fungal_risk
+            name: Fungal Risk
+          - entity: sensor.farm_frost_risk
+            name: Frost Risk (7-day)
+          - entity: sensor.farm_swd_risk
+            name: SWD Pressure
+          - entity: sensor.farm_nws_alerts
+            name: Active NWS Alerts
+
+      - type: entities
+        title: Field Conditions
+        icon: mdi:weather-partly-cloudy
+        entities:
+          - entity: sensor.farm_spray_window
+            name: Spray Window
+          - entity: sensor.farm_vpd
+            name: Vapor Pressure Deficit
+          - entity: sensor.farm_vpd_status
+            name: VPD Status
+          - entity: sensor.farm_soil_moisture
+            name: Soil Moisture (0-7cm)
+          - entity: sensor.farm_soil_temp
+            name: Soil Temp (18cm)

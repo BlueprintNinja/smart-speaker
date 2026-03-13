@@ -1,0 +1,12 @@
+# Farm Dashboard - Ray's Berry Farm
+# Registers a YAML-mode Lovelace dashboard sourced from /config/farm_lovelace.yaml
+# Run scripts/patch-ha-config.ps1 to also create that file automatically.
+
+lovelace:
+  dashboards:
+    lovelace-farm:
+      mode: yaml
+      title: Farm
+      icon: mdi:sprout
+      show_in_sidebar: true
+      filename: farm_lovelace.yaml
