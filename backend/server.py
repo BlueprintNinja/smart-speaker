@@ -116,11 +116,13 @@ GPU_LOCK = asyncio.Semaphore(GPU_CONCURRENCY)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
-    print("[startup] Warming up Whisper...")
+    print("[startup] Warming up Whisper...", flush=True)
     await loop.run_in_executor(None, get_whisper)
-    print("[startup] Warming up Kokoro...")
+    print("[startup] Whisper ready.", flush=True)
+    print("[startup] Warming up Kokoro...", flush=True)
     await loop.run_in_executor(None, get_kokoro)
-    print("[startup] All models ready.")
+    print("[startup] Kokoro ready.", flush=True)
+    print("[startup] All models ready. Server accepting requests.", flush=True)
     yield
 
 
@@ -144,11 +146,13 @@ def get_whisper():
         return _whisper
     from faster_whisper import WhisperModel
     try:
-        print(f"[whisper] Loading on {WHISPER_DEVICE}...")
+        print(f"[whisper] Loading {WHISPER_MODEL} on {WHISPER_DEVICE}...", flush=True)
         _whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_DTYPE)
-    except Exception:
-        print("[whisper] GPU load failed, falling back to CPU...")
+        print(f"[whisper] Loaded on {WHISPER_DEVICE}.", flush=True)
+    except Exception as e:
+        print(f"[whisper] GPU load failed ({e}), falling back to CPU...", flush=True)
         _whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        print("[whisper] Loaded on CPU.", flush=True)
     return _whisper
 
 
@@ -156,12 +160,18 @@ def get_kokoro():
     global _pipeline
     if _pipeline is not None:
         return _pipeline
-    print("[kokoro] Initializing pipeline...")
+    print("[kokoro] Initializing pipeline on GPU...", flush=True)
     try:
         _pipeline = KPipeline(lang_code='a', device='cuda')
+        print("[kokoro] Loaded on GPU.", flush=True)
     except Exception as e:
-        print(f"[kokoro] GPU init failed ({e}), falling back to CPU...")
-        _pipeline = KPipeline(lang_code='a', device='cpu')
+        print(f"[kokoro] GPU init failed ({e}), falling back to CPU...", flush=True)
+        try:
+            _pipeline = KPipeline(lang_code='a', device='cpu')
+            print("[kokoro] Loaded on CPU.", flush=True)
+        except Exception as e2:
+            print(f"[kokoro] CPU init also failed: {e2}", flush=True)
+            raise
     return _pipeline
 
 
