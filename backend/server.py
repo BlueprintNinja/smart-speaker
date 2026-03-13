@@ -411,6 +411,109 @@ async def ha_service(body: dict):
     )
 
 
+# ── Node canvas command tester ─────────────────────────────────────────────────
+@app.post("/test_command")
+async def test_command(body: dict):
+    """
+    Test a voice command against a node graph without physical hardware.
+    Accepts:
+      command  : str  — the voice/text command to test
+      node     : dict — { type, config, action } of the targeted node (optional)
+      nodes    : list — all nodes on the canvas
+      edges    : list — connections between nodes
+    Returns a structured result showing what API call would be made and whether
+    it succeeds against HA (if HA_TOKEN is configured) or a dry-run simulation.
+    """
+    command = body.get("command", "").strip()
+    target_node = body.get("node")
+    nodes = body.get("nodes", [])
+
+    if not command and not target_node:
+        return JSONResponse({"error": "Provide a command or select a node."}, status_code=400)
+
+    NODE_DOMAIN_MAP = {
+        "light":       "light",
+        "camera":      "camera",
+        "tensiometer": "sensor",
+        "irrigation":  "switch",
+    }
+
+    # ── Build a context string describing the canvas for the LLM ──────────────
+    node_descriptions = []
+    for n in nodes:
+        ntype = n.get("type", "unknown")
+        cfg   = n.get("config", {})
+        node_descriptions.append(
+            f"- {ntype} | entity_id: {cfg.get('entity_id','?')} | name: {cfg.get('friendly_name','?')}"
+        )
+
+    canvas_context = "\n".join(node_descriptions) if node_descriptions else "No nodes defined."
+
+    # If a specific node+action was chosen directly, skip LLM and resolve immediately
+    if target_node and target_node.get("action"):
+        ntype   = target_node.get("type", "")
+        cfg     = target_node.get("config", {})
+        action  = target_node.get("action", "")
+        domain  = NODE_DOMAIN_MAP.get(ntype, ntype)
+        entity  = cfg.get("entity_id", "")
+
+        resolved = {"action": f"{domain}.{action}", "entity_id": entity, "extra": {}}
+    else:
+        # ── Ask the LLM to resolve which node+action the command maps to ──────
+        test_prompt = f"""You are a home automation command parser. Given a voice command and a list of available devices, output ONLY a JSON object with the action to take. No explanation.
+
+Available devices:
+{canvas_context}
+
+Voice command: "{command}"
+
+Output format (JSON only):
+{{"action": "<domain>.<service>", "entity_id": "<entity_id>", "extra": {{}}}}
+
+Valid domains/services: light.turn_on, light.turn_off, light.toggle, switch.turn_on, switch.turn_off, switch.toggle, camera.snapshot, sensor.read, cover.open_cover, cover.close_cover, lock.lock, lock.unlock, climate.set_temperature"""
+
+        ol = get_ollama()
+        loop = asyncio.get_event_loop()
+
+        def _ask():
+            resp = ol.chat(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": test_prompt}],
+                stream=False,
+            )
+            return resp["message"]["content"].strip()
+
+        try:
+            raw = await loop.run_in_executor(None, _ask)
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            resolved = json.loads(match.group(0)) if match else None
+        except Exception as e:
+            return {"status": "error", "stage": "llm_parse", "error": str(e), "command": command}
+
+        if not resolved:
+            return {"status": "error", "stage": "llm_parse", "error": "LLM did not return valid JSON.", "raw": raw, "command": command}
+
+    # ── Attempt real HA call or return dry-run ─────────────────────────────────
+    domain, service = resolved.get("action", ".").split(".", 1)
+    entity_id       = resolved.get("entity_id", "")
+    extra           = resolved.get("extra") or {}
+
+    if HA_TOKEN and entity_id:
+        ha_result = await ha_call_service(domain, service, entity_id, extra)
+        mode = "live"
+    else:
+        ha_result = {"dry_run": True, "note": "No HA_TOKEN set or no entity_id — simulated only."}
+        mode = "dry_run"
+
+    return {
+        "status":    "ok" if ha_result.get("ok") or ha_result.get("dry_run") else "error",
+        "mode":      mode,
+        "command":   command,
+        "resolved":  resolved,
+        "ha_result": ha_result,
+    }
+
+
 @app.delete("/conversation")
 async def clear_conversation():
     conversation.clear()

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import NodeCanvas from "./NodeCanvas";
 
 // In Docker (nginx) mode VITE_API is not set — use relative /api so nginx proxies correctly.
 // For local dev, set VITE_API=http://localhost:8000 in your .env file.
@@ -119,6 +120,16 @@ body {
 .dot-green { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
 .dot-red   { background: #f87171; }
 .dot-dim   { background: var(--navy-600); }
+
+.tab-nav { display: flex; border-bottom: 1px solid var(--navy-700); }
+.tab-btn {
+  flex: 1; padding: 0.6rem; background: none; border: none;
+  color: var(--text-dim); font-size: 0.7rem; font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+.tab-btn:hover { color: var(--text-bright); }
+.tab-btn.active { color: var(--amber-400); border-bottom-color: var(--amber-400); }
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,6 +143,7 @@ export default function App() {
   const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
+  const [activeTab, setActiveTab] = useState("chat"); // chat | canvas
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -304,6 +316,10 @@ export default function App() {
               {orbState}
             </div>
           </div>
+          <div className="tab-nav">
+            <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬 Chat</button>
+            <button className={`tab-btn${activeTab === 'canvas' ? ' active' : ''}`} onClick={() => setActiveTab('canvas')}>⬡ Nodes</button>
+          </div>
           <div style={{ padding: '1.5rem' }}>
             <div className="sidebar-stat">
               <span>LLM</span>
@@ -325,68 +341,72 @@ export default function App() {
           </div>
         </aside>
 
-        {/* ── Main Chat ── */}
+        {/* ── Main View ── */}
         <div className="main-view">
-          <div className="chat-history">
-            {messages.length === 0 ? (
-              <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.4 }}>
-                <p>Awaiting your command...</p>
-              </div>
-            ) : (
-              messages.map((msg, i) => (
-                <div key={i} className={`msg ${msg.role}`}>
-                  <div className="msg-meta">{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</div>
-                  <div className="bubble">
-                    {msg.text || "..."}
-                    {msg.role === 'bot' && msg.haResult && (
-                      <div className={`ha-action ${msg.haResult.ok ? 'ok' : 'err'}`}>
-                        {msg.haResult.ok ? '✓ Device command sent' : `✗ ${msg.haResult.error}`}
-                      </div>
-                    )}
-                    {msg.role === 'bot' && i < messages.length - 1 && (
-                      <button className="tts-btn" onClick={() => playTTS(msg.text)}>
-                        ▶ REPLAY AUDIO
-                      </button>
-                    )}
+          {activeTab === 'canvas' ? (
+            <NodeCanvas />
+          ) : (
+            <>
+              <div className="chat-history">
+                {messages.length === 0 ? (
+                  <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.4 }}>
+                    <p>Awaiting your command...</p>
                   </div>
+                ) : (
+                  messages.map((msg, i) => (
+                    <div key={i} className={`msg ${msg.role}`}>
+                      <div className="msg-meta">{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</div>
+                      <div className="bubble">
+                        {msg.text || "..."}
+                        {msg.role === 'bot' && msg.haResult && (
+                          <div className={`ha-action ${msg.haResult.ok ? 'ok' : 'err'}`}>
+                            {msg.haResult.ok ? '✓ Device command sent' : `✗ ${msg.haResult.error}`}
+                          </div>
+                        )}
+                        {msg.role === 'bot' && i < messages.length - 1 && (
+                          <button className="tts-btn" onClick={() => playTTS(msg.text)}>
+                            ▶ REPLAY AUDIO
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div ref={bottomRef} />
+              </div>
+
+              <div className="input-zone">
+                <div className="orb-row">
+                  <button
+                    className={`orb-btn ${orbState}`}
+                    onMouseDown={startListening}
+                    onMouseUp={stopListening}
+                    onTouchStart={startListening}
+                    onTouchEnd={stopListening}
+                  >
+                    <div style={{ width: '30%', height: '30%', border: '2px solid white', borderRadius: '50%' }} />
+                  </button>
+                  <span style={{ fontSize: '0.65rem', marginTop: '0.5rem', color: 'var(--navy-400)', fontWeight: 'bold' }}>
+                    {orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
+                  </span>
                 </div>
-              ))
-            )}
-            <div ref={bottomRef} />
-          </div>
-
-          {/* ── Interaction Zone ── */}
-          <div className="input-zone">
-            <div className="orb-row">
-              <button
-                className={`orb-btn ${orbState}`}
-                onMouseDown={startListening} 
-                onMouseUp={stopListening}
-                onTouchStart={startListening} 
-                onTouchEnd={stopListening}
-              >
-                <div style={{ width: '30%', height: '30%', border: '2px solid white', borderRadius: '50%' }} />
-              </button>
-              <span style={{ fontSize: '0.65rem', marginTop: '0.5rem', color: 'var(--navy-400)', fontWeight: 'bold' }}>
-                {orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
-              </span>
-            </div>
-
-            <div className="text-row">
-              <textarea
-                className="text-input"
-                rows={1}
-                placeholder="Enter command or manual query..."
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={handleKey}
-                disabled={loading}
-              />
-              <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
-                SEND
-              </button>
-            </div>
-          </div>
+                <div className="text-row">
+                  <textarea
+                    className="text-input"
+                    rows={1}
+                    placeholder="Enter command or manual query..."
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    onKeyDown={handleKey}
+                    disabled={loading}
+                  />
+                  <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
+                    SEND
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </>
