@@ -33,5 +33,11 @@ __pycache__/
 
 # Runtime data
 backend/models/
+
+# ha-config — ignore sensitive runtime data, but commit config files
 ha-config/
+!ha-config/configuration.yaml
+!ha-config/automations.yaml
+!ha-config/scripts.yaml
+!ha-config/scenes.yaml
 # ha-packages/ is intentionally NOT ignored — committed HA config packages
