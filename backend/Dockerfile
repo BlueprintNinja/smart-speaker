@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir \
     torch==2.1.2 torchaudio==2.1.2 \
     --index-url https://download.pytorch.org/whl/cu118
 
+# Force numpy<2.0 immediately after PyTorch — prevents ABI mismatch with transformers/kokoro
+RUN pip install --no-cache-dir "numpy>=1.24.0,<2.0"
+
 # Install remaining deps — changing requirements.txt only busts THIS layer
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118
