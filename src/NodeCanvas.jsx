@@ -180,9 +180,20 @@ function makeNode(type, x, y) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
+const STORAGE_KEY = "nodecanvas_v1";
+
+function loadCanvas() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { nodes: [], edges: [] };
+}
+
 export default function NodeCanvas({ api, lastHaEvent }) {
-  const [nodes, setNodes] = useState([]);
-  const [edges, setEdges] = useState([]);   // { id, from, to }
+  const saved = loadCanvas();
+  const [nodes, setNodes] = useState(saved.nodes);
+  const [edges, setEdges] = useState(saved.edges);   // { id, from, to }
   const [selected, setSelected] = useState(null);
   const [dragging, setDragging] = useState(null);  // { nodeId, offX, offY }
   const [wiring, setWiring] = useState(null);      // { fromNode, fromPort:{x,y} }
@@ -194,6 +205,11 @@ export default function NodeCanvas({ api, lastHaEvent }) {
   const [testing, setTesting] = useState(false);
   const [chatHighlight, setChatHighlight] = useState(null); // entity_id triggered from chat
   const canvasRef = useRef(null);
+
+  // ── Persist canvas to localStorage ──────────────────────────────────────────
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges })); } catch {}
+  }, [nodes, edges]);
 
   // ── Highlight nodes triggered by main chat commands ──────────────────────────
   useEffect(() => {

@@ -147,6 +147,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard
   const [showCanvas, setShowCanvas] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
+  const [micError, setMicError] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -266,6 +267,13 @@ export default function App() {
 
   // ── Speech Recognition / Audio Recording ───────────────────────────────────
   const startListening = async () => {
+    setMicError(null);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setMicError(location.protocol !== 'https:' && location.hostname !== 'localhost'
+        ? 'Mic requires HTTPS. Access via localhost or enable HTTPS.'
+        : 'Microphone not supported in this browser.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -279,7 +287,14 @@ export default function App() {
       setIsRecording(true);
       setOrbState("listening");
     } catch (err) {
-      console.error("Mic access denied", err);
+      if (err.name === 'NotAllowedError') {
+        setMicError('Mic permission denied. Allow microphone access in your browser settings.');
+      } else if (err.name === 'NotFoundError') {
+        setMicError('No microphone found. Plug in a mic and try again.');
+      } else {
+        setMicError(`Mic error: ${err.message}`);
+      }
+      setOrbState('idle');
     }
   };
 
@@ -495,6 +510,11 @@ export default function App() {
                     <span style={{ fontSize: '0.65rem', marginTop: '0.5rem', color: 'var(--navy-400)', fontWeight: 'bold' }}>
                       {orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
                     </span>
+                    {micError && (
+                      <span style={{ fontSize: '0.62rem', color: '#f87171', textAlign: 'center', maxWidth: '200px', marginTop: '0.25rem' }}>
+                        ⚠ {micError}
+                      </span>
+                    )}
                   </div>
                   <div className="text-row">
                     <textarea
