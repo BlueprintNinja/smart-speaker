@@ -51,6 +51,36 @@ const NODE_TYPES = {
     ],
     actions: ["turn_on", "turn_off", "toggle"],
   },
+  rainpoint: {
+    label: "RainPoint BLE",
+    color: "#34d399",
+    icon: "🌱",
+    defaultConfig: {
+      moisture_entity: "sensor.rainpoint_soil_moisture",
+      temp_entity: "sensor.rainpoint_soil_temperature",
+      friendly_name: "RainPoint Sensor",
+      dry_threshold: 25,
+      wet_threshold: 75,
+      proxy_host: "esp32-ble-proxy.local",
+    },
+    fields: [
+      { key: "moisture_entity", label: "Moisture Entity ID", placeholder: "sensor.rainpoint_soil_moisture" },
+      { key: "temp_entity", label: "Temperature Entity ID", placeholder: "sensor.rainpoint_soil_temperature" },
+      { key: "friendly_name", label: "Friendly Name", placeholder: "Field 1 RainPoint" },
+      { key: "dry_threshold", label: "Dry Alert Threshold (%)", placeholder: "25" },
+      { key: "wet_threshold", label: "Wet Alert Threshold (%)", placeholder: "75" },
+      { key: "proxy_host", label: "ESP32 BLE Proxy Host", placeholder: "esp32-ble-proxy.local" },
+    ],
+    actions: ["read_moisture", "read_temperature", "check_thresholds"],
+    info: [
+      "BLE device — requires ESP32 Bluetooth Proxy or HA host with Bluetooth within 30ft.",
+      "ESP32 proxy: flash ESPHome 'bluetooth_proxy' preset, plug in near garden.",
+      "HA integration: Settings → Integrations → Bluetooth → discovers automatically.",
+      "Moisture entity appears as sensor.* once HA pairs via Bluetooth integration.",
+      "IP54 rated: splash-proof, not submersible. Keep head elevated.",
+      "Updates every 2s when in range. Historical trends in HA energy dashboard.",
+    ],
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -463,6 +493,14 @@ export default function NodeCanvas({ api, lastHaEvent }) {
                       />
                     </div>
                   ))}
+                  {def.info && (
+                    <div style={{ marginTop: "0.5rem", borderTop: `1px solid ${def.color}33`, paddingTop: "0.5rem" }}>
+                      <div style={{ fontSize: "0.6rem", color: def.color, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "0.3rem" }}>Integration Notes</div>
+                      {def.info.map((line, i) => (
+                        <div key={i} style={{ fontSize: "0.63rem", color: "var(--text-dim)", lineHeight: 1.5, marginBottom: "0.15rem" }}>• {line}</div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
