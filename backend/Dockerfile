@@ -11,13 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3 /usr/bin/python
 
 # Install PyTorch with CUDA 11.8 — supports sm_61 (GTX 1070) through sm_90
-# This layer is cached — do NOT add steps above this that change frequently
+# Pinned versions so this layer stays cached even when requirements.txt changes
 RUN pip install --no-cache-dir \
     torch==2.1.2 torchaudio==2.1.2 \
     --index-url https://download.pytorch.org/whl/cu118
 
+# Install remaining deps — changing requirements.txt only busts THIS layer
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118
 
 COPY . .
 
