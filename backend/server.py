@@ -10,6 +10,7 @@ import os
 import io
 import re
 import json
+import time
 import wave
 import base64
 import tempfile
@@ -17,11 +18,15 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import numpy as np
+import requests
 import httpx
+import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+from kokoro import KPipeline
 
 # ── Config ────────────────────────────────────────────────────────────────────
 OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    "http://localhost:11434")
@@ -29,7 +34,8 @@ OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",   "llama3")
 WHISPER_MODEL  = os.getenv("WHISPER_MODEL",  "medium")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 WHISPER_DTYPE  = os.getenv("WHISPER_DTYPE",  "float16")
-KOKORO_VOICE   = os.getenv("KOKORO_VOICE",   "af_sky")
+KOKORO_VOICE    = os.getenv("KOKORO_VOICE",    "af_sky")
+GPU_CONCURRENCY = int(os.getenv("GPU_CONCURRENCY", "1"))
 
 HA_URL   = os.getenv("HA_URL",   "http://localhost:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
@@ -64,6 +70,10 @@ If the user is just chatting or asking a question (not controlling a device),
 do NOT include any JSON block. Give a short, natural spoken answer."""
 
 
+# ── GPU concurrency lock ──────────────────────────────────────────────────────
+GPU_LOCK = asyncio.Semaphore(GPU_CONCURRENCY)
+
+
 # ── Lifespan (replaces deprecated @app.on_event) ──────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -86,37 +96,45 @@ app.add_middleware(
 )
 
 # ── Lazy loaders ──────────────────────────────────────────────────────────────
-_whisper = None
-_kokoro  = None
-_ollama  = None
+_whisper  = None
+_pipeline = None
 
 
 def get_whisper():
     global _whisper
-    if _whisper is None:
-        print(f"[whisper] Loading {WHISPER_MODEL} on {WHISPER_DEVICE}...")
-        from faster_whisper import WhisperModel
+    if _whisper is not None:
+        return _whisper
+    from faster_whisper import WhisperModel
+    try:
+        print(f"[whisper] Loading on {WHISPER_DEVICE}...")
         _whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_DTYPE)
-        print("[whisper] Ready.")
+    except Exception:
+        print("[whisper] GPU load failed, falling back to CPU...")
+        _whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
     return _whisper
 
 
 def get_kokoro():
-    global _kokoro
-    if _kokoro is None:
-        print(f"[kokoro] Loading voice {KOKORO_VOICE}...")
-        from kokoro import KPipeline
-        _kokoro = KPipeline(lang_code="a")  # 'a' = American English
-        print("[kokoro] Ready.")
-    return _kokoro
+    global _pipeline
+    if _pipeline is not None:
+        return _pipeline
+    print("[kokoro] Initializing pipeline...")
+    _pipeline = KPipeline(lang_code='a')
+    return _pipeline
 
 
-def get_ollama():
-    global _ollama
-    if _ollama is None:
-        from ollama import Client
-        _ollama = Client(host=OLLAMA_HOST)
-    return _ollama
+# ── Ollama helpers ────────────────────────────────────────────────────────────
+def _ollama_chat_stream(messages: list[dict], options: dict):
+    url = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
+    payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": True, "options": options}
+    with requests.post(url, json=payload, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if line:
+                chunk = json.loads(line.decode("utf-8"))
+                content = (chunk.get("message") or {}).get("content", "")
+                if content:
+                    yield content
 
 
 # ── Conversation history ───────────────────────────────────────────────────────
@@ -207,34 +225,27 @@ def strip_command_block(text: str) -> str:
 
 
 # ── WAV synthesis helper ───────────────────────────────────────────────────────
-def synth_wav_bytes(text: str) -> bytes:
-    """Synthesize WAV bytes with Kokoro. Returns raw WAV bytes at 24kHz."""
-    import numpy as np
-    pipeline = get_kokoro()
-    samples = []
-    for _, _, audio in pipeline(text, voice=KOKORO_VOICE, speed=1.0, split_pattern=r"\n+"):
-        samples.append(audio)
-    if not samples:
-        return b""
-    audio_np = np.concatenate(samples)
-    # Kokoro outputs float32 in [-1, 1] at 24000 Hz — convert to 16-bit PCM WAV
-    pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
+def synth_wav_bytes(text: str) -> tuple[bytes, int]:
+    """Synthesize WAV bytes with Kokoro. Returns (wav_bytes, sample_rate)."""
+    pipe = get_kokoro()
+    all_audio = []
+    for _, _, audio in pipe(text, voice=KOKORO_VOICE, speed=1.0, split_pattern=r'\n+'):
+        all_audio.append(audio)
+    if not all_audio:
+        return b"", 24000
+    full_audio = np.concatenate(all_audio)
     buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(24000)
-        wf.writeframes(pcm.tobytes())
-    return buf.getvalue()
+    sf.write(buf, full_audio, 24000, format='WAV')
+    return buf.getvalue(), 24000
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    kokoro_ok = _kokoro is not None
+    kokoro_ok = _pipeline is not None
     try:
-        get_ollama().list()
-        ollama_ok = True
+        r = requests.get(f"{OLLAMA_HOST.rstrip('/')}/api/tags", timeout=3)
+        ollama_ok = r.status_code == 200
     except Exception:
         ollama_ok = False
 
@@ -285,17 +296,11 @@ async def transcribe(audio: UploadFile = File(...)):
         loop = asyncio.get_event_loop()
 
         def _transcribe():
-            segments, _ = get_whisper().transcribe(
-                tmp_path,
-                beam_size=5,
-                language="en",
-                condition_on_previous_text=False,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 500},
-            )
+            segments, _ = get_whisper().transcribe(tmp_path, beam_size=5, language="en")
             return "".join(s.text for s in segments).strip()
 
-        text = await loop.run_in_executor(None, _transcribe)
+        async with GPU_LOCK:
+            text = await loop.run_in_executor(None, _transcribe)
         return {"text": text}
     finally:
         os.unlink(tmp_path)
@@ -303,21 +308,24 @@ async def transcribe(audio: UploadFile = File(...)):
 
 @app.post("/chat")
 async def chat(body: dict):
-    user_msg = body.get("message", "").strip()
+    user_msg = (body.get("message") or "").strip()
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
     conversation.append({"role": "user", "content": user_msg})
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation
-    ol = get_ollama()
 
     async def generate():
         full = ""
         ha_result = None
+        loop = asyncio.get_event_loop()
 
         try:
-            for chunk in ol.chat(model=OLLAMA_MODEL, messages=messages, stream=True):
-                token = chunk["message"]["content"]
+            def _stream():
+                return list(_ollama_chat_stream(messages, {"temperature": 0.6}))
+
+            tokens = await loop.run_in_executor(None, _stream)
+            for token in tokens:
                 full += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception as e:
@@ -355,27 +363,16 @@ async def tts_audio(body: dict):
     loop = asyncio.get_event_loop()
 
     try:
-        wav_bytes = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
+        async with GPU_LOCK:
+            wav_bytes, sr = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
     except Exception as e:
         return JSONResponse({"error": f"TTS failed: {e}"}, status_code=500)
 
-    headers = {"Cache-Control": "no-store", "X-Sample-Rate": "24000"}
-    return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav", headers=headers)
-
-
-@app.post("/tts")
-async def tts(body: dict):
-    text = body.get("text", "").strip()
-    if not text:
-        return JSONResponse({"error": "no text"}, status_code=400)
-
-    loop = asyncio.get_event_loop()
-    try:
-        wav_bytes = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
-    except Exception as e:
-        return JSONResponse({"error": f"TTS failed: {e}"}, status_code=500)
-
-    return {"audio_b64": base64.b64encode(wav_bytes).decode(), "sample_rate": 24000}
+    return StreamingResponse(
+        io.BytesIO(wav_bytes),
+        media_type="audio/wav",
+        headers={"Cache-Control": "no-store", "X-Sample-Rate": str(sr)},
+    )
 
 
 # ── Home Assistant passthrough routes ─────────────────────────────────────────
