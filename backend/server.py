@@ -117,12 +117,18 @@ GPU_LOCK = asyncio.Semaphore(GPU_CONCURRENCY)
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     print("[startup] Warming up Whisper...", flush=True)
-    await loop.run_in_executor(None, get_whisper)
-    print("[startup] Whisper ready.", flush=True)
+    try:
+        await loop.run_in_executor(None, get_whisper)
+        print("[startup] Whisper ready.", flush=True)
+    except Exception as e:
+        print(f"[startup] Whisper failed (non-fatal): {e}", flush=True)
     print("[startup] Warming up Kokoro...", flush=True)
-    await loop.run_in_executor(None, get_kokoro)
-    print("[startup] Kokoro ready.", flush=True)
-    print("[startup] All models ready. Server accepting requests.", flush=True)
+    try:
+        await loop.run_in_executor(None, get_kokoro)
+        print("[startup] Kokoro ready.", flush=True)
+    except Exception as e:
+        print(f"[startup] Kokoro failed (non-fatal, TTS disabled): {e}", flush=True)
+    print("[startup] Server accepting requests.", flush=True)
     yield
 
 
