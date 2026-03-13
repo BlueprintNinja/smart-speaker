@@ -64,6 +64,24 @@ services:
       homeassistant:
         condition: service_started
 
+  # ── Farm Bridge ───────────────────────────────────────────────────────────────
+  farm-bridge:
+    container_name: smart-speaker-farm-bridge
+    build:
+      context: ./farm-bridge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - speaker-net
+    environment:
+      - HA_URL=${HA_URL:-http://homeassistant:8123}
+      - HA_TOKEN=${HA_TOKEN:-}
+      - BRIDGE_INTERVAL_SECONDS=${BRIDGE_INTERVAL_SECONDS:-600}
+      - TZ=${TZ:-America/New_York}
+    depends_on:
+      homeassistant:
+        condition: service_started
+
   # ── Frontend ──────────────────────────────────────────────────────────────────
   frontend:
     container_name: smart-speaker-frontend
