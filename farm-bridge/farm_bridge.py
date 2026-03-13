@@ -291,10 +291,11 @@ def push_sensor(entity_id: str, state: str | int | float, attributes: dict) -> b
     payload = {"state": str(state), "attributes": attributes}
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=10)
+        log.info(f"HA {entity_id} → HTTP {r.status_code}")
         r.raise_for_status()
         return True
     except Exception as e:
-        log.error(f"HA push failed for {entity_id}: {e}")
+        log.error(f"HA push failed for {entity_id}: HTTP {getattr(e.response, 'status_code', '?')} — {e}")
         return False
 
 
