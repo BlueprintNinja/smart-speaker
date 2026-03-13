@@ -370,8 +370,25 @@ async def chat(body: dict):
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
+    # Inject real HA entity list so LLM uses correct entity_ids
+    ha_entities = await ha_list_entities()
+    if ha_entities:
+        ACTIONABLE_DOMAINS = {"light", "switch", "cover", "lock", "climate", "fan", "scene", "script", "automation", "input_boolean"}
+        lines = []
+        for e in ha_entities:
+            domain = e["entity_id"].split(".")[0]
+            if domain not in ACTIONABLE_DOMAINS:
+                continue
+            name = (e.get("attributes") or {}).get("friendly_name") or e["entity_id"]
+            state = e.get("state", "")
+            lines.append(f"  {e['entity_id']} — \"{name}\" [{state}]")
+        entity_block = "\n== YOUR HOME ASSISTANT ENTITIES (use these exact entity_ids) ==\n" + "\n".join(lines)
+        dynamic_prompt = SYSTEM_PROMPT + entity_block
+    else:
+        dynamic_prompt = SYSTEM_PROMPT
+
     conversation.append({"role": "user", "content": user_msg})
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation
+    messages = [{"role": "system", "content": dynamic_prompt}] + conversation
 
     async def generate():
         full = ""
