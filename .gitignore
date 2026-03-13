@@ -34,3 +34,4 @@ __pycache__/
 # Runtime data
 backend/models/
 ha-config/
+# ha-packages/ is intentionally NOT ignored — committed HA config packages

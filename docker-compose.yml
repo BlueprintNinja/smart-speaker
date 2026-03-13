@@ -21,6 +21,7 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ./ha-config:/config
+      - ./ha-packages:/config/packages
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8123/"]
       interval: 30s

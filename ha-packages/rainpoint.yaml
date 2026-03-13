@@ -1,0 +1,153 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RainPoint BLE Soil Moisture & Temperature Sensor
+# Ray's Berry Farm — Jersey County, IL
+#
+# SETUP STEPS:
+#   1. Flash esphome-ble-proxy.yaml to an ESP32 (see /ha-packages/esphome-ble-proxy.yaml)
+#   2. Plug ESP32 into USB outlet within 30ft of the RainPoint sensor in the garden
+#   3. In HA: Settings → Integrations → ESPHome → add the ESP32 IP/hostname
+#   4. HA will then auto-discover the RainPoint BLE device under Bluetooth integrations
+#   5. Once paired, the real entity IDs will appear — update the entity_id fields below
+#      (default guesses: sensor.rainpoint_soil_moisture, sensor.rainpoint_soil_temperature)
+#
+# NOTE: If your HA host PC has Bluetooth built-in and is within 30ft of the sensor,
+#       skip the ESP32 step — go straight to Settings → Integrations → Bluetooth.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Input sliders for configurable thresholds (editable in HA UI) ─────────────
+input_number:
+  rainpoint_dry_threshold:
+    name: "RainPoint Dry Alert Threshold"
+    min: 5
+    max: 60
+    step: 1
+    initial: 25
+    unit_of_measurement: "%"
+    icon: mdi:water-off
+
+  rainpoint_wet_threshold:
+    name: "RainPoint Wet Alert Threshold"
+    min: 50
+    max: 95
+    step: 1
+    initial: 75
+    unit_of_measurement: "%"
+    icon: mdi:water-check
+
+# ── Template sensors — derived from raw BLE sensor values ─────────────────────
+template:
+  - sensor:
+      - name: "Soil Moisture Status"
+        unique_id: rainpoint_moisture_status
+        icon: mdi:sprout
+        state: >
+          {% set m = states('sensor.rainpoint_soil_moisture') | float(-1) %}
+          {% set dry = states('input_number.rainpoint_dry_threshold') | float(25) %}
+          {% set wet = states('input_number.rainpoint_wet_threshold') | float(75) %}
+          {% if m < 0 %}
+            Unknown
+          {% elif m <= dry %}
+            DRY — Irrigate Now
+          {% elif m >= wet %}
+            WET — Hold Irrigation
+          {% else %}
+            OK
+          {% endif %}
+
+      - name: "Soil VPD Estimate"
+        unique_id: rainpoint_vpd_estimate
+        unit_of_measurement: "kPa"
+        icon: mdi:thermometer-water
+        state: >
+          {% set t = states('sensor.rainpoint_soil_temperature') | float(-99) %}
+          {% set m = states('sensor.rainpoint_soil_moisture') | float(-1) %}
+          {% if t < -50 or m < 0 %}
+            unavailable
+          {% else %}
+            {% set svp = 0.6108 * (2.718 ** ((17.27 * t) / (t + 237.3))) %}
+            {% set rh = [m, 100] | min %}
+            {{ ((svp * (1 - rh / 100)) | round(2)) }}
+          {% endif %}
+
+# ── Automations ────────────────────────────────────────────────────────────────
+automation:
+  - id: rainpoint_dry_alert
+    alias: "RainPoint — Soil Too Dry Alert"
+    description: "Notify and log when soil moisture drops below the dry threshold"
+    trigger:
+      - platform: template
+        value_template: >
+          {{ states('sensor.rainpoint_soil_moisture') | float(-1) <
+             states('input_number.rainpoint_dry_threshold') | float(25) }}
+        for:
+          minutes: 15
+    condition:
+      - condition: template
+        value_template: "{{ states('sensor.rainpoint_soil_moisture') | float(-1) >= 0 }}"
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "🌵 Soil Moisture Low"
+          message: >
+            Soil moisture is {{ states('sensor.rainpoint_soil_moisture') }}% —
+            below the {{ states('input_number.rainpoint_dry_threshold') }}% threshold.
+            Consider irrigating.
+          notification_id: rainpoint_dry
+    mode: single
+
+  - id: rainpoint_wet_alert
+    alias: "RainPoint — Soil Oversaturated Alert"
+    description: "Notify when soil is oversaturated — hold irrigation"
+    trigger:
+      - platform: template
+        value_template: >
+          {{ states('sensor.rainpoint_soil_moisture') | float(-1) >
+             states('input_number.rainpoint_wet_threshold') | float(75) }}
+        for:
+          minutes: 10
+    condition:
+      - condition: template
+        value_template: "{{ states('sensor.rainpoint_soil_moisture') | float(-1) >= 0 }}"
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "💧 Soil Oversaturated"
+          message: >
+            Soil moisture is {{ states('sensor.rainpoint_soil_moisture') }}% —
+            above {{ states('input_number.rainpoint_wet_threshold') }}%. Hold irrigation.
+          notification_id: rainpoint_wet
+    mode: single
+
+  - id: rainpoint_offline_alert
+    alias: "RainPoint — Sensor Offline"
+    description: "Alert if BLE sensor stops reporting (out of range or battery dead)"
+    trigger:
+      - platform: state
+        entity_id: sensor.rainpoint_soil_moisture
+        to: "unavailable"
+        for:
+          minutes: 30
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "📡 RainPoint Offline"
+          message: "RainPoint soil sensor has been unavailable for 30 minutes. Check battery or ESP32 proxy."
+          notification_id: rainpoint_offline
+    mode: single
+
+# ── Dashboard card config (copy into a Lovelace card) ─────────────────────────
+# To add to your HA dashboard, go to Dashboard → Edit → Add Card → Manual and paste:
+#
+# type: entities
+# title: "🌱 RainPoint Soil Sensor"
+# entities:
+#   - entity: sensor.rainpoint_soil_moisture
+#     name: Soil Moisture
+#   - entity: sensor.rainpoint_soil_temperature
+#     name: Soil Temperature
+#   - entity: sensor.soil_moisture_status
+#     name: Status
+#   - entity: input_number.rainpoint_dry_threshold
+#     name: Dry Threshold
+#   - entity: input_number.rainpoint_wet_threshold
+#     name: Wet Threshold

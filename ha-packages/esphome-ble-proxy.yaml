@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ESPHome Bluetooth Proxy for RainPoint BLE Soil Sensor
+# Ray's Berry Farm — Jersey County, IL
+#
+# HARDWARE: Any ESP32 dev board (~$5-10)
+#   Recommended: "ESP32-WROOM-32" or "Wemos D1 Mini ESP32"
+#   Search: "ESP32 development board" on Amazon/AliExpress
+#
+# FLASH INSTRUCTIONS:
+#   1. Install ESPHome: pip install esphome   OR use ESPHome Dashboard add-on in HA
+#   2. Connect ESP32 via USB to your PC
+#   3. Run: esphome run esphome-ble-proxy.yaml
+#      (first flash only — after that it updates OTA over WiFi)
+#   4. Unplug from PC, plug into USB outlet near garden (within 30ft of RainPoint)
+#   5. In HA: Settings → Integrations → ESPHome → it appears automatically
+#   6. HA Bluetooth integration will then see the RainPoint BLE advertisements
+# ─────────────────────────────────────────────────────────────────────────────
+
+esphome:
+  name: ble-proxy-garden
+  friendly_name: "Garden BLE Proxy"
+  comment: "ESP32 Bluetooth proxy for RainPoint soil sensor — berry farm"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# ── WiFi — update with your network credentials ───────────────────────────────
+wifi:
+  ssid: "YOUR_WIFI_SSID"
+  password: "YOUR_WIFI_PASSWORD"
+  # Static IP optional but recommended for stability
+  # manual_ip:
+  #   static_ip: 192.168.1.200
+  #   gateway: 192.168.1.1
+  #   subnet: 255.255.255.0
+
+  ap:
+    ssid: "BLE-Proxy-Fallback"
+    password: "farmsetup"
+
+captive_portal:
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logger:
+  level: INFO
+
+# ── HA API — allows ESPHome to talk to Home Assistant ─────────────────────────
+api:
+  encryption:
+    key: !secret esphome_api_key   # generate at: https://esphome.io/components/api.html
+
+# ── OTA updates — flash new firmware wirelessly after initial USB flash ────────
+ota:
+  - platform: esphome
+    password: !secret esphome_ota_password
+
+# ── Bluetooth Proxy — this is the core feature ────────────────────────────────
+# Relays BLE advertisements from nearby devices to Home Assistant over WiFi
+bluetooth_proxy:
+  active: true   # active=true allows HA to initiate BLE connections (needed for RainPoint pairing)
+
+# ── Optional: status LED on GPIO2 (built-in LED on most ESP32 boards) ─────────
+light:
+  - platform: status_led
+    name: "BLE Proxy Status"
+    pin: GPIO2
+
+# ── Optional: uptime + WiFi signal sensors visible in HA ──────────────────────
+sensor:
+  - platform: uptime
+    name: "BLE Proxy Uptime"
+  - platform: wifi_signal
+    name: "BLE Proxy WiFi Signal"
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "BLE Proxy IP Address"
+    ssid:
+      name: "BLE Proxy WiFi SSID"
