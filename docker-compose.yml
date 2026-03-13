@@ -41,6 +41,7 @@ services:
       - "8000:8000"
     environment:
       # Ollama runs natively on the host for GPU access — host.docker.internal reaches it
+      - PYTHONUNBUFFERED=1
       - OLLAMA_HOST=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3:latest}
       - WHISPER_MODEL=${WHISPER_MODEL:-medium}
