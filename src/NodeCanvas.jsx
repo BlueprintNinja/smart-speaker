@@ -1,7 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-const API = import.meta?.env?.VITE_API || "/api";
-
 // ─────────────────────────────────────────────────────────────────────────────
 // NODE TYPE DEFINITIONS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,7 +180,7 @@ function makeNode(type, x, y) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-export default function NodeCanvas() {
+export default function NodeCanvas({ api, lastHaEvent }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);   // { id, from, to }
   const [selected, setSelected] = useState(null);
@@ -194,7 +192,18 @@ export default function NodeCanvas() {
   const [testAction, setTestAction] = useState("");
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [chatHighlight, setChatHighlight] = useState(null); // entity_id triggered from chat
   const canvasRef = useRef(null);
+
+  // ── Highlight nodes triggered by main chat commands ──────────────────────────
+  useEffect(() => {
+    if (!lastHaEvent) return;
+    const entity = lastHaEvent.entity_id || (lastHaEvent.result || {}).entity_id;
+    if (entity) {
+      setChatHighlight(entity);
+      setTimeout(() => setChatHighlight(null), 3000);
+    }
+  }, [lastHaEvent]);
 
   // ── Drag node ───────────────────────────────────────────────────────────────
   const onNodeMouseDown = useCallback((e, nodeId) => {
@@ -298,7 +307,7 @@ export default function NodeCanvas() {
     };
 
     try {
-      const res = await fetch(`${API}/test_command`, {
+      const res = await fetch(`${api}/test_command`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -395,7 +404,12 @@ export default function NodeCanvas() {
               <div
                 key={node.id}
                 className={`canvas-node${selected === node.id ? " selected" : ""}`}
-                style={{ left: node.x, top: node.y }}
+                style={{
+                  left: node.x, top: node.y,
+                  ...(chatHighlight && node.config.entity_id === chatHighlight
+                    ? { boxShadow: "0 0 0 2px #4ade80, 0 0 20px rgba(74,222,128,0.4)", borderColor: "#4ade80" }
+                    : {}),
+                }}
                 onMouseDown={e => onNodeMouseDown(e, node.id)}
               >
                 {/* Input port */}

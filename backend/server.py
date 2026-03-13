@@ -41,33 +41,71 @@ HA_URL   = os.getenv("HA_URL",   "http://localhost:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 
 # ── System prompt ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a helpful, concise home and farm voice assistant.
+SYSTEM_PROMPT = """You are a helpful, concise home and farm voice assistant with deep Home Assistant integration.
 
-When the user asks you to control a device, ALWAYS include a JSON command block
-in your response using exactly this format — nothing before or after the block:
+When the user asks you to control a device or trigger an action, ALWAYS include a JSON command block
+in your response using exactly this format:
 
 ```json
 {"action": "<domain>.<service>", "entity_id": "<entity_id>", "extra": {}}
 ```
 
-Valid actions include:
+== LIGHTS ==
   light.turn_on, light.turn_off, light.toggle
+  extra: {"brightness_pct": 80}  |  {"rgb_color": [255, 100, 0]}  |  {"color_temp": 300}
+
+== SWITCHES & PLUGS ==
   switch.turn_on, switch.turn_off, switch.toggle
-  cover.open_cover, cover.close_cover, cover.toggle
+
+== IRRIGATION & FARM ==
+  switch.turn_on / switch.turn_off  — for irrigation zone switches (e.g. switch.irrigation_zone_1)
+  input_boolean.turn_on / turn_off  — for virtual irrigation toggles
+  automation.trigger  — to trigger scheduled irrigation automations
+  For timed irrigation: extra: {"variables": {"duration": 10}}  (minutes)
+  Soil moisture sensors are read-only (sensor domain) — report their state, do not command them.
+
+== COVERS / GATES / BLINDS ==
+  cover.open_cover, cover.close_cover, cover.stop_cover, cover.toggle
+  cover.set_cover_position  extra: {"position": 50}  (0=closed, 100=open)
+
+== LOCKS ==
   lock.lock, lock.unlock
-  climate.set_temperature  (extra: {"temperature": 72})
+
+== CLIMATE / THERMOSTAT ==
+  climate.set_temperature  extra: {"temperature": 72}
+  climate.set_hvac_mode    extra: {"hvac_mode": "heat"}  or "cool", "auto", "off"
+  climate.turn_on, climate.turn_off
+
+== SCENES ==
+  scene.turn_on  (entity_id is the scene entity, e.g. scene.evening_farm)
+
+== SCRIPTS ==
   script.turn_on
-  automation.trigger
-  homeassistant.turn_on, homeassistant.turn_off  (for groups/scenes)
 
-For light brightness or color:
-  extra: {"brightness_pct": 80}  or  {"rgb_color": [255, 100, 0]}
+== AUTOMATIONS ==
+  automation.trigger, automation.turn_on, automation.turn_off
 
-If you do NOT know the exact entity_id, use your best guess based on the device
-name the user mentioned and note it in your spoken reply.
+== FANS ==
+  fan.turn_on, fan.turn_off, fan.toggle
+  fan.set_percentage  extra: {"percentage": 75}
 
-If the user is just chatting or asking a question (not controlling a device),
-do NOT include any JSON block. Give a short, natural spoken answer."""
+== ALARMS ==
+  alarm_control_panel.alarm_arm_away, alarm_control_panel.alarm_disarm
+  extra: {"code": "1234"}  if required
+
+== NOTIFICATIONS ==
+  notify.notify  extra: {"message": "...", "title": "..."}
+
+== GROUPS / ALL DEVICES ==
+  homeassistant.turn_on, homeassistant.turn_off  (works on groups and scenes)
+
+If you do NOT know the exact entity_id, make your best guess based on the name the user mentioned
+(e.g. "barn lights" → light.barn_lights) and mention it in your reply so the user can correct it.
+
+For read-only questions ("what is the soil moisture?", "is the gate open?", "what's the temperature?")
+do NOT include a JSON block — just answer naturally based on context.
+
+If the user is chatting or asking a general question, do NOT include any JSON block."""
 
 
 # ── GPU concurrency lock ──────────────────────────────────────────────────────
@@ -465,16 +503,13 @@ Output format (JSON only):
 
 Valid domains/services: light.turn_on, light.turn_off, light.toggle, switch.turn_on, switch.turn_off, switch.toggle, camera.snapshot, sensor.read, cover.open_cover, cover.close_cover, lock.lock, lock.unlock, climate.set_temperature"""
 
-        ol = get_ollama()
         loop = asyncio.get_event_loop()
 
         def _ask():
-            resp = ol.chat(
-                model=OLLAMA_MODEL,
-                messages=[{"role": "user", "content": test_prompt}],
-                stream=False,
-            )
-            return resp["message"]["content"].strip()
+            return "".join(_ollama_chat_stream(
+                [{"role": "user", "content": test_prompt}],
+                {"temperature": 0.1},
+            ))
 
         try:
             raw = await loop.run_in_executor(None, _ask)
@@ -505,6 +540,135 @@ Valid domains/services: light.turn_on, light.turn_off, light.toggle, switch.turn
         "resolved":  resolved,
         "ha_result": ha_result,
     }
+
+
+# ── Extended Home Assistant routes ────────────────────────────────────────────
+@app.get("/ha/areas")
+async def ha_areas():
+    """Return all HA areas/rooms with their entities."""
+    if not HA_TOKEN:
+        return {"areas": []}
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(f"{HA_URL}/api/states", headers=_ha_headers())
+            r.raise_for_status()
+            states = r.json()
+        except Exception:
+            return {"areas": []}
+
+    areas: dict[str, list] = {}
+    for s in states:
+        area = s.get("attributes", {}).get("area_id") or "Uncategorized"
+        areas.setdefault(area, []).append({
+            "entity_id": s["entity_id"],
+            "state":     s["state"],
+            "name":      s.get("attributes", {}).get("friendly_name", s["entity_id"]),
+            "domain":    s["entity_id"].split(".")[0],
+            "attributes": s.get("attributes", {}),
+        })
+    return {"areas": areas}
+
+
+@app.get("/ha/scenes")
+async def ha_scenes():
+    """List all HA scenes."""
+    entities = await ha_list_entities("scene")
+    return {"scenes": [
+        {"entity_id": e["entity_id"],
+         "name": e.get("attributes", {}).get("friendly_name", e["entity_id"])}
+        for e in entities
+    ]}
+
+
+@app.post("/ha/scene/activate")
+async def ha_scene_activate(body: dict):
+    """Activate a HA scene."""
+    return await ha_call_service("scene", "turn_on", body.get("entity_id", ""))
+
+
+@app.get("/ha/automations")
+async def ha_automations():
+    """List all HA automations."""
+    entities = await ha_list_entities("automation")
+    return {"automations": [
+        {"entity_id": e["entity_id"],
+         "state":     e["state"],
+         "name":      e.get("attributes", {}).get("friendly_name", e["entity_id"])}
+        for e in entities
+    ]}
+
+
+@app.post("/ha/automation/trigger")
+async def ha_automation_trigger(body: dict):
+    """Trigger a HA automation."""
+    return await ha_call_service("automation", "trigger", body.get("entity_id", ""))
+
+
+@app.get("/ha/history/{entity_id:path}")
+async def ha_history(entity_id: str, hours: int = 24):
+    """Fetch state history for an entity over the last N hours."""
+    if not HA_TOKEN:
+        return {"history": []}
+    from datetime import datetime, timezone, timedelta
+    start = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    url = f"{HA_URL}/api/history/period/{start}?filter_entity_id={entity_id}&minimal_response=true"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, headers=_ha_headers())
+            r.raise_for_status()
+            data = r.json()
+            history = data[0] if data else []
+            return {"entity_id": entity_id, "history": [
+                {"state": h.get("state"), "last_changed": h.get("last_changed")}
+                for h in history
+            ]}
+    except Exception as e:
+        return {"error": str(e), "history": []}
+
+
+@app.get("/ha/camera/{entity_id:path}")
+async def ha_camera_snapshot(entity_id: str):
+    """Proxy a camera snapshot image from HA."""
+    if not HA_TOKEN:
+        return JSONResponse({"error": "HA_TOKEN not configured"}, status_code=401)
+    url = f"{HA_URL}/api/camera_proxy/{entity_id}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, headers=_ha_headers())
+            r.raise_for_status()
+            return StreamingResponse(io.BytesIO(r.content), media_type=r.headers.get("content-type", "image/jpeg"))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@app.get("/ha/dashboard")
+async def ha_dashboard():
+    """Return a structured dashboard summary: lights, switches, sensors, covers, climate, cameras."""
+    if not HA_TOKEN:
+        return {"groups": {}}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{HA_URL}/api/states", headers=_ha_headers())
+            r.raise_for_status()
+            states = r.json()
+    except Exception as e:
+        return {"error": str(e), "groups": {}}
+
+    DOMAINS = ["light", "switch", "cover", "lock", "climate", "sensor", "binary_sensor", "camera", "fan", "automation", "scene"]
+    groups: dict[str, list] = {d: [] for d in DOMAINS}
+
+    for s in states:
+        domain = s["entity_id"].split(".")[0]
+        if domain not in groups:
+            continue
+        groups[domain].append({
+            "entity_id":  s["entity_id"],
+            "state":      s["state"],
+            "name":       s.get("attributes", {}).get("friendly_name", s["entity_id"]),
+            "attributes": s.get("attributes", {}),
+        })
+
+    return {"groups": groups}
 
 
 @app.delete("/conversation")

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import NodeCanvas from "./NodeCanvas";
+import Dashboard from "./Dashboard";
 
 // In Docker (nginx) mode VITE_API is not set — use relative /api so nginx proxies correctly.
 // For local dev, set VITE_API=http://localhost:8000 in your .env file.
@@ -143,7 +144,8 @@ export default function App() {
   const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
-  const [activeTab, setActiveTab] = useState("chat"); // chat | canvas
+  const [activeTab, setActiveTab] = useState("chat"); // chat | canvas | dashboard
+  const [lastHaEvent, setLastHaEvent] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -246,8 +248,7 @@ export default function App() {
               updateLastBotMessage(botText, null, null);
             } else if (data.event === "ha_result") {
               updateLastBotMessage(null, null, data.result);
-            } else if (data.event === "rag") {
-              updateLastBotMessage(null, data.sources, null);
+              setLastHaEvent(data.result);
             } else if (data.done) {
               playTTS(data.full);
             }
@@ -318,6 +319,7 @@ export default function App() {
           </div>
           <div className="tab-nav">
             <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬 Chat</button>
+            <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞ Dashboard</button>
             <button className={`tab-btn${activeTab === 'canvas' ? ' active' : ''}`} onClick={() => setActiveTab('canvas')}>⬡ Nodes</button>
           </div>
           <div style={{ padding: '1.5rem' }}>
@@ -336,7 +338,7 @@ export default function App() {
             </div>
             <div className="sidebar-stat" style={{ border: 'none', marginTop: '0.5rem' }}>
               <span>VOICE ENGINE</span>
-              <span style={{ color: 'var(--amber-400)', fontSize: '0.65rem' }}>PIPER</span>
+              <span style={{ color: 'var(--amber-400)', fontSize: '0.65rem' }}>KOKORO</span>
             </div>
           </div>
         </aside>
@@ -344,7 +346,9 @@ export default function App() {
         {/* ── Main View ── */}
         <div className="main-view">
           {activeTab === 'canvas' ? (
-            <NodeCanvas />
+            <NodeCanvas api={API} lastHaEvent={lastHaEvent} />
+          ) : activeTab === 'dashboard' ? (
+            <Dashboard api={API} />
           ) : (
             <>
               <div className="chat-history">
