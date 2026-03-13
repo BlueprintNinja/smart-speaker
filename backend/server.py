@@ -363,11 +363,17 @@ async def chat(body: dict):
                 return list(_ollama_chat_stream(messages, {"temperature": 0.6}))
 
             tokens = await loop.run_in_executor(None, _stream)
-            for token in tokens:
-                full += token
-                yield f"data: {json.dumps({'token': token})}\n\n"
+            if not tokens:
+                yield f"data: {json.dumps({'token': '[No response from LLM — check Ollama is running and model is pulled]'})}\n\n"
+                full = ""
+            else:
+                for token in tokens:
+                    full += token
+                    yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            err_msg = f"[LLM error: {e}]"
+            yield f"data: {json.dumps({'token': err_msg})}\n\n"
+            full = err_msg
 
         # ── Execute any embedded HA command ───────────────────────────────────
         cmd = extract_ha_command(full)
@@ -669,6 +675,23 @@ async def ha_dashboard():
         })
 
     return {"groups": groups}
+
+
+@app.get("/debug")
+async def debug():
+    """Connectivity debug — checks Ollama reachability and lists available models."""
+    result = {"ollama_host": OLLAMA_HOST, "ollama_model": OLLAMA_MODEL}
+    try:
+        r = requests.get(f"{OLLAMA_HOST.rstrip('/')}/api/tags", timeout=5)
+        result["ollama_reachable"] = True
+        result["ollama_status"] = r.status_code
+        data = r.json()
+        result["models"] = [m["name"] for m in data.get("models", [])]
+        result["model_available"] = any(OLLAMA_MODEL in m for m in result["models"])
+    except Exception as e:
+        result["ollama_reachable"] = False
+        result["ollama_error"] = str(e)
+    return result
 
 
 @app.delete("/conversation")
