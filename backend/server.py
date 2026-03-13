@@ -157,7 +157,11 @@ def get_kokoro():
     if _pipeline is not None:
         return _pipeline
     print("[kokoro] Initializing pipeline...")
-    _pipeline = KPipeline(lang_code='a')
+    try:
+        _pipeline = KPipeline(lang_code='a', device='cuda')
+    except Exception as e:
+        print(f"[kokoro] GPU init failed ({e}), falling back to CPU...")
+        _pipeline = KPipeline(lang_code='a', device='cpu')
     return _pipeline
 
 
