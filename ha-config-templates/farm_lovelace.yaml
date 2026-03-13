@@ -9,9 +9,18 @@ views:
         forecast_type: daily
         name: Jersey County Forecast
 
-      - type: area
-        area: devices
-        show_camera: false
+      - type: entities
+        title: RainPoint Soil Sensor
+        icon: mdi:water
+        entities:
+          - entity: input_number.rainpoint_dry_threshold
+            name: Dry Alert Threshold
+          - entity: input_number.rainpoint_wet_threshold
+            name: Wet Alert Threshold
+          - entity: sensor.soil_moisture_status
+            name: Soil Moisture Status
+          - entity: sensor.soil_vpd_estimate
+            name: Soil VPD Estimate
 
       - type: entities
         title: Growth & Season
