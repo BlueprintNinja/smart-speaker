@@ -3,7 +3,7 @@ Smart Speaker - GPU Backend
 Runs locally on your GPU PC. Handles:
  - STT: faster-whisper (GPU accelerated)
  - LLM: Ollama with intent extraction for home/farm control
- - TTS: Piper TTS
+ - TTS: Kokoro TTS
  - Home Control: Home Assistant REST API
 """
 import os
@@ -29,7 +29,7 @@ OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",   "llama3")
 WHISPER_MODEL  = os.getenv("WHISPER_MODEL",  "medium")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 WHISPER_DTYPE  = os.getenv("WHISPER_DTYPE",  "float16")
-PIPER_MODEL    = os.getenv("PIPER_MODEL",    "en_US-joe-medium.onnx")
+KOKORO_VOICE   = os.getenv("KOKORO_VOICE",   "af_sky")
 
 HA_URL   = os.getenv("HA_URL",   "http://localhost:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
@@ -70,8 +70,8 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     print("[startup] Warming up Whisper...")
     await loop.run_in_executor(None, get_whisper)
-    print("[startup] Warming up Piper...")
-    await loop.run_in_executor(None, get_piper)
+    print("[startup] Warming up Kokoro...")
+    await loop.run_in_executor(None, get_kokoro)
     print("[startup] All models ready.")
     yield
 
@@ -87,7 +87,7 @@ app.add_middleware(
 
 # ── Lazy loaders ──────────────────────────────────────────────────────────────
 _whisper = None
-_piper   = None
+_kokoro  = None
 _ollama  = None
 
 
@@ -101,16 +101,14 @@ def get_whisper():
     return _whisper
 
 
-def get_piper():
-    global _piper
-    if _piper is None:
-        if not Path(PIPER_MODEL).exists():
-            return None
-        print(f"[piper] Loading {PIPER_MODEL}...")
-        from piper.voice import PiperVoice
-        _piper = PiperVoice.load(PIPER_MODEL)
-        print("[piper] Ready.")
-    return _piper
+def get_kokoro():
+    global _kokoro
+    if _kokoro is None:
+        print(f"[kokoro] Loading voice {KOKORO_VOICE}...")
+        from kokoro import KPipeline
+        _kokoro = KPipeline(lang_code="a")  # 'a' = American English
+        print("[kokoro] Ready.")
+    return _kokoro
 
 
 def get_ollama():
@@ -209,26 +207,31 @@ def strip_command_block(text: str) -> str:
 
 
 # ── WAV synthesis helper ───────────────────────────────────────────────────────
-def synth_wav_bytes(text: str) -> tuple[bytes, int]:
-    """Synthesize WAV bytes with Piper. Returns (wav_bytes, sample_rate)."""
-    piper = get_piper()
-    if piper is None:
-        raise FileNotFoundError(f"Piper model '{PIPER_MODEL}' not found.")
-
+def synth_wav_bytes(text: str) -> bytes:
+    """Synthesize WAV bytes with Kokoro. Returns raw WAV bytes at 24kHz."""
+    import numpy as np
+    pipeline = get_kokoro()
+    samples = []
+    for _, _, audio in pipeline(text, voice=KOKORO_VOICE, speed=1.0, split_pattern=r"\n+"):
+        samples.append(audio)
+    if not samples:
+        return b""
+    audio_np = np.concatenate(samples)
+    # Kokoro outputs float32 in [-1, 1] at 24000 Hz — convert to 16-bit PCM WAV
+    pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
-        wf.setframerate(piper.config.sample_rate)
-        piper.synthesize(text, wf)
-
-    return buf.getvalue(), piper.config.sample_rate
+        wf.setframerate(24000)
+        wf.writeframes(pcm.tobytes())
+    return buf.getvalue()
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    piper_ok = Path(PIPER_MODEL).exists()
+    kokoro_ok = _kokoro is not None
     try:
         get_ollama().list()
         ollama_ok = True
@@ -263,8 +266,8 @@ async def health():
         "ollama_ok": ollama_ok,
         "whisper_model": WHISPER_MODEL,
         "whisper_device": WHISPER_DEVICE,
-        "piper_model": PIPER_MODEL,
-        "piper_ok": piper_ok,
+        "kokoro_voice": KOKORO_VOICE,
+        "kokoro_ok": kokoro_ok,
         "ha_url": HA_URL,
         "ha_ok": ha_ok,
         "gpu": gpu_info,
@@ -351,17 +354,12 @@ async def tts_audio(body: dict):
 
     loop = asyncio.get_event_loop()
 
-    def _synth():
-        return synth_wav_bytes(text)
-
     try:
-        wav_bytes, sr = await loop.run_in_executor(None, _synth)
-    except FileNotFoundError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+        wav_bytes = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
     except Exception as e:
         return JSONResponse({"error": f"TTS failed: {e}"}, status_code=500)
 
-    headers = {"Cache-Control": "no-store", "X-Sample-Rate": str(sr)}
+    headers = {"Cache-Control": "no-store", "X-Sample-Rate": "24000"}
     return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav", headers=headers)
 
 
@@ -373,13 +371,11 @@ async def tts(body: dict):
 
     loop = asyncio.get_event_loop()
     try:
-        wav_bytes, sr = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
-    except FileNotFoundError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+        wav_bytes = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
     except Exception as e:
         return JSONResponse({"error": f"TTS failed: {e}"}, status_code=500)
 
-    return {"audio_b64": base64.b64encode(wav_bytes).decode(), "sample_rate": sr}
+    return {"audio_b64": base64.b64encode(wav_bytes).decode(), "sample_rate": 24000}
 
 
 # ── Home Assistant passthrough routes ─────────────────────────────────────────
