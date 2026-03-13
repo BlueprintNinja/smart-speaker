@@ -1,11 +1,19 @@
-FROM python:3.11-slim
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
+ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    python3.11 python3.11-dev python3-pip \
+    ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Install PyTorch with CUDA 11.8 — supports sm_61 (GTX 1070) through sm_90
+RUN pip install --no-cache-dir \
+    torch==2.1.2 torchaudio==2.1.2 \
+    --index-url https://download.pytorch.org/whl/cu118
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
