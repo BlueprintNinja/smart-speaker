@@ -48,7 +48,7 @@ services:
       - WHISPER_DTYPE=${WHISPER_DTYPE:-float16}
       - KOKORO_VOICE=${KOKORO_VOICE:-af_sky}
       # HA runs on host network, so use host.docker.internal to reach it
-      - HA_URL=${HA_URL:-http://host.docker.internal:8123}
+      - HA_URL=${HA_URL:-http://homeassistant:8123}
       - HA_TOKEN=${HA_TOKEN:-}
       - TZ=${TZ:-America/New_York}
     deploy:
