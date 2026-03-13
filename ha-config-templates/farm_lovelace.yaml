@@ -10,18 +10,6 @@ views:
         name: Jersey County Forecast
 
       - type: area
-        area: living_room
-        show_camera: false
-
-      - type: area
-        area: kitchen
-        show_camera: false
-
-      - type: area
-        area: bedroom
-        show_camera: false
-
-      - type: area
         area: devices
         show_camera: false
 
