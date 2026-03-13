@@ -163,6 +163,107 @@ export default function App() {
       .catch(() => setHaStatus(false));
   }, []);
 
+  // ── Proactive Farm Intelligence ─────────────────────────────────────────────
+  const primeFarm = async (forceBrief = false) => {
+    try {
+      const FARM_LAT = 39.09, FARM_LON = -90.33, GDD_BASE = 50;
+      const today = new Date();
+      const fmt = d => d.toISOString().slice(0, 10);
+      const gddStart  = new Date(today.getFullYear(), 2, 1);
+      const chillStart = new Date(today.getFullYear(), 8, 1);
+      const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+
+      const [histRes, fcastRes, nwsRes] = await Promise.all([
+        fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${FARM_LAT}&longitude=${FARM_LON}&start_date=${fmt(gddStart)}&end_date=${fmt(yesterday)}&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto`),
+        fetch(`https://api.open-meteo.com/v1/forecast?latitude=${FARM_LAT}&longitude=${FARM_LON}&past_days=2&forecast_days=7&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,precipitation,soil_moisture_0_to_7cm&temperature_unit=fahrenheit&precipitation_unit=inch&wind_speed_unit=mph&timezone=auto`),
+        fetch(`https://api.weather.gov/alerts/active?point=${FARM_LAT},${FARM_LON}`),
+      ]);
+      const hist  = await histRes.json();
+      const fcast = await fcastRes.json();
+      const nws   = nwsRes.ok ? await nwsRes.json() : { features: [] };
+
+      let gdd = 0;
+      for (let i = 0; i < (hist.daily?.temperature_2m_max?.length ?? 0); i++) {
+        const avg = (hist.daily.temperature_2m_max[i] + hist.daily.temperature_2m_min[i]) / 2;
+        gdd += Math.max(0, avg - GDD_BASE);
+      }
+      const ti = fcast.daily.time.findIndex(t => t === fmt(today));
+      if (ti >= 0) gdd += Math.max(0, ((fcast.daily.temperature_2m_max[ti] + fcast.daily.temperature_2m_min[ti]) / 2) - GDD_BASE);
+
+      let chillHours = 0;
+      const chillStr = fmt(chillStart);
+      for (let i = 0; i < fcast.hourly.time.length; i++) {
+        if (fcast.hourly.time[i] >= chillStr && fcast.hourly.temperature_2m[i] < 45) chillHours++;
+      }
+
+      const nowStr = new Date().toISOString().slice(0, 13);
+      const ci = Math.max(0, fcast.hourly.time.findIndex(t => t.slice(0, 13) >= nowStr));
+      const temp   = fcast.hourly.temperature_2m[ci] ?? 0;
+      const humid  = fcast.hourly.relative_humidity_2m[ci] ?? 0;
+      const wind   = fcast.hourly.wind_speed_10m[ci] ?? 0;
+      const gusts  = fcast.hourly.wind_gusts_10m[ci] ?? 0;
+      const precip = fcast.hourly.precipitation[ci] ?? 0;
+      const soilM  = fcast.hourly.soil_moisture_0_to_7cm[ci] ?? 0;
+
+      const STAGES = [{s:"Dormant",g:0},{s:"Bud Break",g:100},{s:"Vegetative",g:200},{s:"Flowering",g:350},{s:"Green Fruit",g:550},{s:"Ripening",g:750},{s:"Harvest Ready",g:900},{s:"Post-Harvest",g:1100}];
+      let growthStage = "Dormant";
+      for (const x of STAGES) { if (gdd >= x.g) growthStage = x.s; }
+
+      const alerts = (nws.features ?? []).map(f => ({ event: f.properties.event, severity: f.properties.severity, headline: f.properties.headline }));
+
+      const insights = [];
+      if (alerts.length) insights.push(...alerts.map(a => ({ severity: "critical", title: a.event, summary: a.headline?.slice(0, 100) || a.event })));
+      const frostVuln = ["Bud Break","Vegetative","Flowering","Green Fruit"];
+      if (frostVuln.includes(growthStage)) {
+        for (let i = 0; i < fcast.daily.time.length; i++) {
+          if (fcast.daily.temperature_2m_min[i] <= 32) {
+            insights.push({ severity: "critical", title: "Frost Risk", summary: `${fcast.daily.temperature_2m_min[i]}°F low on ${fcast.daily.time[i]} during ${growthStage}` });
+            break;
+          }
+        }
+      }
+      if (gdd >= 500 && gdd < 1200) insights.push({ severity: gdd >= 800 ? "critical" : "warning", title: "SWD Pressure", summary: gdd >= 800 ? `Peak SWD at ${Math.round(gdd)} GDD — IPM required` : `SWD emerging at ${Math.round(gdd)} GDD — set traps` });
+      const wetness = Math.min(1, (Math.max(0, humid - 60) / 40) + precip * 2);
+      const fungal = Math.round(Math.min(100, wetness * (temp >= 60 && temp <= 80 ? 1 : 0.6) * 100));
+      if (fungal >= 70) insights.push({ severity: fungal >= 85 ? "critical" : "warning", title: "Fungal Risk", summary: `${fungal}% fungal pressure at ${Math.round(humid)}% humidity` });
+      if (soilM < 0.1) insights.push({ severity: "warning", title: "Low Soil Moisture", summary: `Soil moisture ${(soilM*100).toFixed(1)}% — consider irrigation` });
+
+      const criticals = insights.filter(i => i.severity === "critical").length;
+      const context = {
+        timestamp: today.toLocaleString(),
+        gdd, chillHours, growthStage,
+        weather: { current: { temp, humidity: humid, windSpeed: wind, windGusts: gusts, precipitation: precip, soilMoisture: soilM } },
+        alerts, insights,
+      };
+
+      const res = await fetch(`${API}/farm/prime`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context, criticals, force_brief: forceBrief }),
+      });
+      const data = await res.json();
+
+      if (data.brief) {
+        setMessages(prev => [...prev, { role: "bot", text: `🌿 ${data.brief}`, isFarmBrief: true }]);
+        playTTS(data.brief);
+      }
+    } catch (e) {
+      console.warn("Farm prime failed:", e);
+    }
+  };
+
+  useEffect(() => {
+    // Initial prime on load (silent — no brief unless criticals exist)
+    primeFarm(false);
+    // Every 10 min re-prime; every hour force a brief
+    let count = 0;
+    const id = setInterval(() => {
+      count++;
+      primeFarm(count % 6 === 0); // force spoken brief every 60 min
+    }, 10 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // ── Speech Recognition / Audio Recording ───────────────────────────────────
   const startListening = async () => {
     try {

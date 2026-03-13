@@ -698,6 +698,70 @@ async def debug():
     return result
 
 
+@app.post("/farm/prime")
+async def farm_prime(body: dict):
+    """
+    Called periodically by the frontend with fresh farm data.
+    Injects farm state as a persistent system memory so all future /chat
+    and /farm/ask calls have current context. Also generates a proactive
+    spoken briefing if there are critical/warning insights.
+    Body: { context: { ... }, criticals: int, force_brief: bool }
+    """
+    ctx = body.get("context") or {}
+    criticals = body.get("criticals", 0)
+    force_brief = body.get("force_brief", False)
+
+    gdd      = ctx.get("gdd", 0)
+    stage    = ctx.get("growthStage", "Unknown")
+    chill    = ctx.get("chillHours", 0)
+    insights = ctx.get("insights") or []
+    weather  = ctx.get("weather") or {}
+    current  = weather.get("current") or {}
+    temp     = current.get("temp", "?")
+    alerts   = ctx.get("alerts") or []
+
+    # Build compact farm status string for injection into conversation memory
+    critical_items = [i for i in insights if i.get("severity") == "critical"]
+    warning_items  = [i for i in insights if i.get("severity") == "warning"]
+
+    farm_status = (
+        f"[FARM STATUS UPDATE — {ctx.get('timestamp', 'now')}] "
+        f"Ray's Berry Farm: {stage}, {round(gdd)} GDD, {chill} chill hrs, {temp}°F. "
+        f"Criticals: {len(critical_items)}, Warnings: {len(warning_items)}. "
+        + (f"NWS Alerts: {', '.join(a.get('event','') for a in alerts)}. " if alerts else "")
+        + " | ".join(f"{i.get('title','?')}: {i.get('summary','')[:80]}" for i in (critical_items + warning_items)[:4])
+    )
+
+    # Inject as a system memory message into the global conversation
+    # Use a special role marker so it doesn't appear as user/assistant
+    conversation.append({"role": "system", "content": farm_status})
+    # Keep conversation from growing unbounded — trim old farm primes (keep last 2)
+    farm_primes = [i for i, m in enumerate(conversation) if m["role"] == "system"]
+    while len(farm_primes) > 2:
+        conversation.pop(farm_primes.pop(0))
+
+    # Generate a proactive briefing only if there are criticals or force_brief
+    brief = None
+    if criticals > 0 or force_brief:
+        prompt_msgs = [
+            {"role": "system", "content": f"""You are Sky, an expert AI farm advisor for Ray's Berry Farm.
+Current farm status: {farm_status}
+Generate a concise spoken farm briefing (2-3 sentences max). Lead with the most urgent issue.
+Be direct, practical, and use natural spoken language — this will be read aloud by TTS.
+Do not use bullet points or formatting. Start with 'Hey Ray,' if it's a critical alert."""},
+            {"role": "user", "content": "Give me a farm status briefing."},
+        ]
+        loop = asyncio.get_event_loop()
+        try:
+            def _get_brief():
+                return "".join(_ollama_chat_stream(prompt_msgs, {"temperature": 0.4, "max_tokens": 120}))
+            brief = await loop.run_in_executor(None, _get_brief)
+        except Exception as e:
+            brief = f"Farm update: {stage}, {round(gdd)} GDD. {len(critical_items)} critical alerts."
+
+    return {"status": "primed", "brief": brief, "criticals": criticals, "stage": stage, "gdd": round(gdd)}
+
+
 @app.post("/farm/ask")
 async def farm_ask(body: dict):
     """
