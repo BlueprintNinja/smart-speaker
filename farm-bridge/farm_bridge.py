@@ -151,7 +151,7 @@ def composite_yield_threat(daily: dict, hourly: dict, soil_moisture: float, gdd:
     start = max(0, next((i for i, t in enumerate(hourly.get("time", [])) if t[:13] >= now_str), 0))
     fungal_scores = [
         get_fungal_risk(
-            hourly["relativehumidity_2m"][start + k] or 0,
+            hourly["relative_humidity_2m"][start + k] or 0,
             hourly["precipitation"][start + k] or 0,
             hourly["temperature_2m"][start + k] or 0,
         )
