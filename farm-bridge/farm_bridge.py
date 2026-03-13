@@ -129,6 +129,8 @@ def frost_risk_level(daily: dict, gdd: float) -> str:
         if d < today:
             continue
         low = daily["temperature_2m_min"][i]
+        if low is None:
+            continue
         if low <= 32:
             return "critical" if low < 28 else "warning"
     return "none"
@@ -138,7 +140,7 @@ def composite_yield_threat(daily: dict, hourly: dict, soil_moisture: float, gdd:
     today = datetime.date.today().isoformat()
     # Frost
     frost_score = 80 if any(
-        daily["temperature_2m_min"][i] <= 32
+        daily["temperature_2m_min"][i] is not None and daily["temperature_2m_min"][i] <= 32
         for i, d in enumerate(daily.get("time", []))
         if d >= today
     ) else 0
@@ -148,19 +150,24 @@ def composite_yield_threat(daily: dict, hourly: dict, soil_moisture: float, gdd:
     now_str = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H")
     start = max(0, next((i for i, t in enumerate(hourly.get("time", [])) if t[:13] >= now_str), 0))
     fungal_scores = [
-        get_fungal_risk(hourly["relativehumidity_2m"][start + k], hourly["precipitation"][start + k], hourly["temperature_2m"][start + k])
+        get_fungal_risk(
+            hourly["relativehumidity_2m"][start + k] or 0,
+            hourly["precipitation"][start + k] or 0,
+            hourly["temperature_2m"][start + k] or 0,
+        )
         for k in range(min(48, len(hourly.get("time", [])) - start))
+        if hourly["temperature_2m"][start + k] is not None
     ]
     fungal_score = max(fungal_scores) if fungal_scores else 0
     # Drought
     drought_score = 75 if soil_moisture < 0.25 else 40 if soil_moisture < 0.40 else 20 if soil_moisture < 0.50 else 0
     # Heat
     heat_score = 50 if any(
-        daily["temperature_2m_max"][i] >= 95
+        daily["temperature_2m_max"][i] is not None and daily["temperature_2m_max"][i] >= 95
         for i, d in enumerate(daily.get("time", []))
         if d >= today
     ) else 25 if any(
-        daily["temperature_2m_max"][i] >= 90
+        daily["temperature_2m_max"][i] is not None and daily["temperature_2m_max"][i] >= 90
         for i, d in enumerate(daily.get("time", []))
         if d >= today
     ) else 0
@@ -225,6 +232,8 @@ def compute_gdd_since_mar1(daily: dict) -> float:
             continue
         tmax = daily["temperature_2m_max"][i]
         tmin = daily["temperature_2m_min"][i]
+        if tmax is None or tmin is None:
+            continue
         avg = (tmax + tmin) / 2
         gdd += max(0, avg - GDD_BASE)
     return round(gdd, 1)
@@ -240,7 +249,8 @@ def compute_chill_hours(hourly: dict) -> int:
     for i, t in enumerate(hourly.get("time", [])):
         if t[:10] < sep1 or t[:10] > today_str:
             continue
-        if hourly["temperature_2m"][i] < CHILL_THRESHOLD_F:
+        temp = hourly["temperature_2m"][i]
+        if temp is not None and temp < CHILL_THRESHOLD_F:
             count += 1
     return count
 
