@@ -19,7 +19,7 @@ services:
     volumes:
       - ./ha-config:/config
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123/api/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8123/"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -57,7 +57,7 @@ services:
               capabilities: [gpu]
     depends_on:
       homeassistant:
-        condition: service_healthy
+        condition: service_started
 
   # ── Frontend ──────────────────────────────────────────────────────────────────
   frontend:
