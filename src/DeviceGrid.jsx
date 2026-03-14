@@ -37,6 +37,22 @@ function getEntityMeta(entityId) {
   return ICON_MAP[domain] || { icon: "📦", color: "#94a3b8" };
 }
 
+// Map entity_id domain to canvas node type for /canvas/sync
+const DOMAIN_TO_NODE_TYPE = {
+  light: "light",
+  switch: "irrigation",  // switches are actionable like irrigation
+  camera: "camera",
+  sensor: "tensiometer",
+  binary_sensor: "tensiometer",
+  input_boolean: "switch",
+  automation: "switch",
+  script: "switch",
+  scene: "light",
+  climate: "switch",
+  fan: "switch",
+  cover: "switch",
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,10 +189,30 @@ export default function DeviceGrid({ api, lastHaEvent }) {
   const [allEntities, setAllEntities] = useState([]);
   const searchRef = useRef(null);
 
-  // Persist to localStorage
+  // Persist to localStorage + sync to HA
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(devices)); } catch {}
-  }, [devices]);
+    // Sync devices to HA as virtual entities (same as old NodeCanvas)
+    if (api && devices.length > 0) {
+      const nodes = devices.map((dev, i) => {
+        const domain = dev.entity_id.split(".")[0] || "";
+        const ntype = DOMAIN_TO_NODE_TYPE[domain] || "tensiometer";
+        return {
+          id: `device_${i}`,
+          type: ntype,
+          config: {
+            entity_id: dev.entity_id,
+            friendly_name: dev.name,
+          },
+        };
+      });
+      fetch(`${api}/canvas/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes }),
+      }).catch(() => {});
+    }
+  }, [devices, api]);
 
   // Poll HA entity states
   useEffect(() => {
@@ -242,9 +278,10 @@ export default function DeviceGrid({ api, lastHaEvent }) {
       <style>{gridStyles}</style>
       <div className="device-grid">
         {devices.map(dev => {
-          const ha = haStates[dev.entity_id];
+          const slug = dev.entity_id.includes(".") ? dev.entity_id.split(".").slice(1).join(".") : dev.entity_id;
+          const ha = haStates[dev.entity_id] || haStates[`input_boolean.${slug}`] || haStates[`sensor.canvas_${slug}`];
           const state = ha?.state ?? "—";
-          const isOn = state === "on" || state === "open" || state === "playing" || state === "home";
+          const isOn = state === "on" || state === "open" || state === "playing" || state === "home" || state === "synced";
           const isPulsing = pulsingId === dev.entity_id;
           return (
             <div
