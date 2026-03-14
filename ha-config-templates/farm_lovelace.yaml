@@ -67,6 +67,19 @@ views:
           - entity: sensor.farm_soil_temp
             name: Soil Temp (18cm)
 
+      - type: entities
+        title: Blackberry Irrigation (Master Valve)
+        icon: mdi:water-pump
+        entities:
+          - entity: switch.master_valve
+            name: Master Valve
+          - entity: sensor.blackberry_row_status
+            name: Current Row
+          - entity: automation.sky_irrigation_daily_gatekeeper
+            name: Daily Gatekeeper
+          - entity: script.manual_blackberry_watering
+            name: Manual Watering (30min)
+
       - type: entity-filter
         card:
           type: entities
@@ -174,6 +187,8 @@ views:
           icon: mdi:water
         show_empty: false
         entities:
+          - entity: automation.sky_irrigation_daily_gatekeeper
+          - entity: automation.sky_irrigation_weather_skip_notify
           - entity: automation.sky_auto_irrigate_low_moisture
           - entity: automation.sky_auto_irrigate_on_low_soil_moisture
           - entity: automation.sky_midday_irrigation_check
