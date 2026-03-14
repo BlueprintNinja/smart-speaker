@@ -1936,12 +1936,15 @@ async def _ha_create_input_boolean(client, slug: str, name: str, icon: str) -> s
     Requires the input_boolean integration to be loaded (see ha-packages/smart_speaker_helpers.yaml).
     Falls back to states API if config API is unavailable."""
     eid = f"input_boolean.{slug}"
+    # Use slug-based name so HA generates the correct entity_id (slugify derives it from name)
+    # e.g., slug="irrigation_zone_1" → api_name="irrigation zone 1" → entity = input_boolean.irrigation_zone_1
+    api_name = slug.replace("_", " ")
     # Try config API first (creates a real helper that responds to services)
     try:
         r = await client.post(
             f"{HA_URL}/api/config/input_boolean/config",
             headers=_ha_headers(),
-            json={"name": name, "icon": icon},
+            json={"name": api_name, "icon": icon},
         )
         if r.status_code in (200, 201):
             data = r.json()
@@ -2055,9 +2058,24 @@ async def canvas_sync(body: dict):
                 except Exception:
                     pass
 
-        # ── 2. Create real input_boolean helpers for new actionable nodes ────
+        # ── 2. Create/verify real input_boolean helpers for actionable nodes ─
         for slug, info in current_slugs.items():
-            if slug not in helpers:
+            eid = f"input_boolean.{slug}"
+            need_create = slug not in helpers
+            # Verify existing helpers actually exist in HA (handles stale entries)
+            if not need_create:
+                try:
+                    r_check = await client.get(f"{HA_URL}/api/states/{eid}", headers=_ha_headers())
+                    if r_check.status_code == 404 or r_check.json().get("state") == "unavailable":
+                        print(f"[canvas_sync] {eid} missing in HA — re-creating", flush=True)
+                        # Delete stale config entry if possible
+                        old_id = helpers.pop(slug, "")
+                        if old_id and old_id != "states_fallback":
+                            await _ha_delete_input_boolean(client, slug, old_id)
+                        need_create = True
+                except Exception:
+                    pass
+            if need_create:
                 config_id = await _ha_create_input_boolean(client, slug, info["name"], info["icon"])
                 if config_id:
                     helpers[slug] = config_id

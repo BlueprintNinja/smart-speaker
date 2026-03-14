@@ -501,7 +501,9 @@ export default function NodeCanvas({ api, lastHaEvent }) {
             {nodes.map(node => {
               const def = NODE_TYPES[node.type];
               const entityId = resolveEntityId(node);
-              const haEntity = haStates[entityId] || haStates[node.config.entity_id];
+              const cfgEid = node.config.entity_id || "";
+              const slug = cfgEid.includes(".") ? cfgEid.split(".").slice(1).join(".") : cfgEid;
+              const haEntity = haStates[entityId] || haStates[cfgEid] || haStates[`input_boolean.${slug}`];
               const state = haEntity?.state ?? "—";
               const isOn = state === "on" || state === "open" || state === "unlocked";
               const isOff = state === "off" || state === "closed" || state === "locked";
