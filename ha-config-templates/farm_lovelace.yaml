@@ -121,6 +121,17 @@ views:
           - "paused"
           - "idle"
 
+      - type: entities
+        title: Farm Scripts
+        icon: mdi:script-text
+        entities:
+          - entity: script.irrigation_sequence
+            name: Irrigation Sequence (All Zones)
+          - entity: script.irrigate_zone
+            name: Irrigate Single Zone
+          - entity: input_number.irrigation_duration
+            name: Default Duration (seconds)
+
   - title: Scenes & Automations
     icon: mdi:robot-outline
     path: scenes-automations

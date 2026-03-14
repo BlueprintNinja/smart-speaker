@@ -163,6 +163,32 @@ CRITICAL RULES:
   {"action": "scene.turn_on", "entity_id": "scene.farm_frost_protection"}
   ```
 
+== SCRIPTS (multi-step sequences) ==
+  script.turn_on  — run a pre-defined multi-step script
+  
+  IRRIGATION SEQUENCE: script.irrigation_sequence
+  Runs zones 1 → 2 → 3 sequentially, each for the specified duration, then auto-off.
+  Use this when the user asks to "irrigate all zones" or "run irrigation one after the other".
+  Pass duration_seconds as a variable. Default is input_number.irrigation_duration.
+  Example: "irrigate each zone for 30 seconds, one after the other" →
+  ```json
+  {"action": "script.turn_on", "entity_id": "script.irrigation_sequence", "extra": {"variables": {"duration_seconds": 30}}}
+  ```
+  Example: "run the irrigation sequence for 5 minutes" →
+  ```json
+  {"action": "script.turn_on", "entity_id": "script.irrigation_sequence", "extra": {"variables": {"duration_seconds": 300}}}
+  ```
+  
+  SINGLE ZONE: script.irrigate_zone
+  Irrigates one zone with auto-off. Runs in parallel (up to 3).
+  Example: "irrigate zone 2 for 60 seconds" →
+  ```json
+  {"action": "script.turn_on", "entity_id": "script.irrigate_zone", "extra": {"variables": {"zone_entity": "input_boolean.irrigation_zone_2", "timer_entity": "timer.sky_irrigation_zone_2", "duration_seconds": 60}}}
+  ```
+
+  RULE: When the user asks to irrigate MULTIPLE zones sequentially ("one after the other", "each zone"),
+  ALWAYS use script.irrigation_sequence. Do NOT emit multiple JSON blocks for individual zones.
+
 == CREATE AUTOMATION TOOL ==
 When the user asks you to CREATE a new automation rule (e.g., "when X happens, do Y"), emit:
 

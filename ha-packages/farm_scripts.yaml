@@ -1,0 +1,135 @@
+# Farm Scripts — Ray's Berry Farm
+# Sequential irrigation and other multi-step operations.
+# Trigger via voice: "Hey Sky, run the irrigation sequence for 30 seconds"
+
+input_number:
+  irrigation_duration:
+    name: "Irrigation Duration"
+    icon: mdi:timer-sand
+    min: 10
+    max: 3600
+    step: 10
+    unit_of_measurement: "seconds"
+    initial: 300
+    mode: slider
+
+script:
+  # Sequential irrigation: runs each zone one after the other for the configured duration.
+  # Call with: script.turn_on entity_id=script.irrigation_sequence
+  # Or with variable: service script.irrigation_sequence { duration: 30 }
+  irrigation_sequence:
+    alias: "Irrigation Sequence"
+    icon: mdi:water-sync
+    description: "Runs irrigation zones 1 → 2 → 3 sequentially, each for the configured duration."
+    mode: restart
+    fields:
+      duration_seconds:
+        description: "Duration per zone in seconds (overrides input_number if provided)"
+        example: 30
+    sequence:
+      # Determine duration: use passed variable or fall back to input_number
+      - variables:
+          zone_duration: >
+            {{ duration_seconds | default(states('input_number.irrigation_duration') | int, true) }}
+      # ── Zone 1 ──
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.irrigation_zone_1
+      - service: timer.start
+        target:
+          entity_id: timer.sky_irrigation_zone_1
+        data:
+          duration: "{{ zone_duration }}"
+      - service: rest_command.sky_alert
+        data:
+          sensor: "script.irrigation_sequence"
+          state: "zone_1_started"
+          message: "Zone 1 irrigation started for {{ zone_duration }} seconds."
+          severity: "info"
+      - delay:
+          seconds: "{{ zone_duration | int }}"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.irrigation_zone_1
+
+      # ── Zone 2 ──
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.irrigation_zone_2
+      - service: timer.start
+        target:
+          entity_id: timer.sky_irrigation_zone_2
+        data:
+          duration: "{{ zone_duration }}"
+      - service: rest_command.sky_alert
+        data:
+          sensor: "script.irrigation_sequence"
+          state: "zone_2_started"
+          message: "Zone 2 irrigation started for {{ zone_duration }} seconds."
+          severity: "info"
+      - delay:
+          seconds: "{{ zone_duration | int }}"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.irrigation_zone_2
+
+      # ── Zone 3 ──
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.irrigation_zone_3
+      - service: timer.start
+        target:
+          entity_id: timer.sky_irrigation_zone_3
+        data:
+          duration: "{{ zone_duration }}"
+      - service: rest_command.sky_alert
+        data:
+          sensor: "script.irrigation_sequence"
+          state: "zone_3_started"
+          message: "Zone 3 irrigation started for {{ zone_duration }} seconds."
+          severity: "info"
+      - delay:
+          seconds: "{{ zone_duration | int }}"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.irrigation_zone_3
+
+      # ── Done ──
+      - service: rest_command.sky_alert
+        data:
+          sensor: "script.irrigation_sequence"
+          state: "complete"
+          message: "Irrigation sequence complete — all 3 zones ran for {{ zone_duration }} seconds each."
+          severity: "info"
+
+  # Quick single-zone irrigation with auto-off
+  irrigate_zone:
+    alias: "Irrigate Single Zone"
+    icon: mdi:water
+    description: "Irrigates a specific zone for a set duration then turns it off."
+    mode: parallel
+    max: 3
+    fields:
+      zone_entity:
+        description: "The input_boolean entity for the zone"
+        example: "input_boolean.irrigation_zone_1"
+      timer_entity:
+        description: "The timer entity for the zone"
+        example: "timer.sky_irrigation_zone_1"
+      duration_seconds:
+        description: "Duration in seconds"
+        example: 30
+    sequence:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: "{{ zone_entity }}"
+      - service: timer.start
+        target:
+          entity_id: "{{ timer_entity }}"
+        data:
+          duration: "{{ duration_seconds }}"
+      - delay:
+          seconds: "{{ duration_seconds | int }}"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: "{{ zone_entity }}"
