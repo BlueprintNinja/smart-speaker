@@ -154,6 +154,23 @@ RULES for FETCH_TREND:
 - Default to 72 hours if the user doesn't specify a timeframe.
 - Common timeframes: "today"=24h, "this week"=168h, "yesterday"=48h, "last few days"=72h
 
+== LOGBOOK TOOL ==
+When the user asks about what happened, recent activity, event history, or "what's been going on", use this tool:
+
+[FETCH_LOGBOOK: <hours>]
+[FETCH_LOGBOOK: <entity_id>, <hours>]
+
+Examples:
+- "what happened today?" → [FETCH_LOGBOOK: 24]
+- "what's been going on with irrigation?" → [FETCH_LOGBOOK: input_boolean.irrigation_zone_1, 48]
+- "show me farm activity this week" → [FETCH_LOGBOOK: 168]
+
+RULES for FETCH_LOGBOOK:
+- Use ONLY the tool tag on its own line.
+- The system will fetch real HA logbook entries and call you again with the results.
+- If the user asks about a specific entity, include the entity_id. Otherwise, omit it to get all activity.
+- Default to 24 hours. Use 168 for "this week", 48 for "yesterday".
+
 == TIMER TOOL (feature 6) ==
 When the user asks you to run something for a set duration (irrigation, lights, etc.), after sending the
 JSON command to turn it on, also emit a TIMER tag to schedule automatic turn-off:
@@ -586,6 +603,7 @@ def strip_command_block(text: str) -> str:
     # Remove tool tags
     text = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", text)
     text = re.sub(r"\[TIMER:[^\]]+\]", "", text)
+    text = re.sub(r"\[FETCH_LOGBOOK:[^\]]+\]", "", text)
     # Clean up leftover punctuation/whitespace artefacts like trailing ". " or double spaces
     text = re.sub(r"\s{2,}", " ", text)
     text = re.sub(r"\.\s*\.", ".", text)
@@ -1004,6 +1022,46 @@ async def chat(body: dict):
                     return list(_ollama_chat_stream(trend_messages, {"temperature": 0.4}))
                 tokens2 = await loop.run_in_executor(None, _stream2)
                 full = "".join(tokens2) if tokens2 else trend_summary
+
+            # ── LOGBOOK tool ──────────────────────────────────────────────
+            logbook_match = re.search(r"\[FETCH_LOGBOOK:\s*(?:([^,\]]+),\s*)?(\d+)\]", full)
+            if logbook_match:
+                lb_entity = (logbook_match.group(1) or "").strip() or None
+                lb_hours = int(logbook_match.group(2).strip())
+                print(f"[logbook] Fetching {lb_entity or 'all'} for {lb_hours}h", flush=True)
+                try:
+                    lb_data = await ha_logbook(hours=lb_hours, entity_id=lb_entity)
+                    lb_entries = lb_data.get("entries", [])
+                    if lb_entries:
+                        lb_lines = []
+                        for e in lb_entries:
+                            line = f"  {e['when']} | {e['name']}"
+                            if e.get('state'):
+                                line += f" → {e['state']}"
+                            if e.get('message'):
+                                line += f" ({e['message']})"
+                            lb_lines.append(line)
+                        lb_summary = (
+                            f"HA Logbook ({lb_entity or 'all entities'}, last {lb_hours}h, {len(lb_entries)} entries):\n"
+                            + "\n".join(lb_lines)
+                        )
+                    else:
+                        lb_summary = f"No logbook entries found for {lb_entity or 'any entity'} in the last {lb_hours} hours."
+                except Exception as lbe:
+                    lb_summary = f"Could not fetch logbook: {lbe}"
+
+                lb_messages = messages + [
+                    {"role": "assistant", "content": full},
+                    {"role": "user", "content": (
+                        f"[SYSTEM: Logbook data retrieved]\n{lb_summary}\n"
+                        f"Now answer the user's original question naturally using this logbook data. "
+                        f"Summarize the key events concisely. Do not mention the tool call or system message."
+                    )},
+                ]
+                def _stream_lb():
+                    return list(_ollama_chat_stream(lb_messages, {"temperature": 0.4}))
+                tokens_lb = await loop.run_in_executor(None, _stream_lb)
+                full = "".join(tokens_lb) if tokens_lb else lb_summary
 
             # ── Feature 6: TIMER tool ─────────────────────────────────────
             timer_cfg = extract_timer(full)
@@ -2009,6 +2067,47 @@ async def ha_trend(entity_id: str, hours: int = 72):
         return {"entity_id": entity_id, "hours": hours, "points": points, "stats": stats}
     except Exception as e:
         return {"error": str(e), "points": []}
+
+
+# ── HA Logbook endpoint ───────────────────────────────────────────────────────
+@app.get("/ha/logbook")
+async def ha_logbook_proxy(hours: int = 24, entity: str = ""):
+    """Proxy to HA logbook API. Returns recent logbook entries."""
+    return await ha_logbook(hours=hours, entity_id=entity or None)
+
+
+async def ha_logbook(hours: int = 24, entity_id: str | None = None) -> dict:
+    """Fetch HA logbook entries. Returns a compact summary for LLM consumption."""
+    if not HA_TOKEN:
+        return {"error": "HA_TOKEN not set", "entries": []}
+    start = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+    url = f"{HA_URL}/api/logbook/{start}"
+    params = {}
+    if entity_id:
+        params["entity"] = entity_id
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(url, headers=_ha_headers(), params=params)
+            r.raise_for_status()
+            raw = r.json()
+
+        # Compact the entries for LLM context (limit to most recent 50)
+        entries = []
+        for e in raw[-50:]:
+            entry = {
+                "when": e.get("when", "")[:19],
+                "name": e.get("name", ""),
+                "state": e.get("state", ""),
+                "entity_id": e.get("entity_id", ""),
+            }
+            msg = e.get("message", "")
+            if msg:
+                entry["message"] = msg
+            entries.append(entry)
+
+        return {"hours": hours, "entity_id": entity_id, "count": len(entries), "entries": entries}
+    except Exception as e:
+        return {"error": str(e), "entries": []}
 
 
 if __name__ == "__main__":
