@@ -491,9 +491,12 @@ async def chat(body: dict):
                 yield f"data: {json.dumps({'token': '[No response from LLM — check Ollama is running and model is pulled]'})}\n\n"
                 full = ""
             else:
-                for token in tokens:
-                    full += token
-                    yield f"data: {json.dumps({'token': token})}\n\n"
+                full = "".join(tokens)
+                # Strip the JSON command block before displaying to user
+                spoken = strip_command_block(full)
+                # Stream the cleaned text token by token (split on words to keep streaming feel)
+                for word in re.findall(r'\S+\s*', spoken):
+                    yield f"data: {json.dumps({'token': word})}\n\n"
         except Exception as e:
             err_msg = f"[LLM error: {e}]"
             yield f"data: {json.dumps({'token': err_msg})}\n\n"
