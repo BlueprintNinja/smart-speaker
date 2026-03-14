@@ -34,7 +34,7 @@ from kokoro import KPipeline
 # ── Config ────────────────────────────────────────────────────────────────────
 OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    "http://localhost:11434")
 # Mutable model selection — can be changed at runtime via /model endpoint
-_ollama_state  = {"model": os.getenv("OLLAMA_MODEL", "llama3")}
+_ollama_state  = {"model": os.getenv("OLLAMA_MODEL", "llama3"), "num_ctx": 2048}
 AVAILABLE_MODELS = [
     "llama3.1:latest",
     "qwen3.5:latest",
@@ -381,18 +381,19 @@ def get_kokoro():
 # ── Ollama helpers ────────────────────────────────────────────────────────────
 def _ollama_chat_stream(messages: list[dict], options: dict, deep_think: bool = False):
     url = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
-    # Ensure num_predict is set to avoid runaway generation
+    # Ensure num_predict and num_ctx are set
     if deep_think:
         options.setdefault("num_predict", 2048)
     else:
         options.setdefault("num_predict", 512)
+    options.setdefault("num_ctx", _ollama_state["num_ctx"])
     model = _ollama_state["model"]
     payload = {"model": model, "messages": messages, "stream": True, "options": options}
     # Control thinking for reasoning models (qwen3, deepseek-r1, etc.)
     if any(t in model.lower() for t in ("qwen3", "deepseek-r1", "qwq")):
         payload["think"] = deep_think
     mode = "DEEP THINK" if deep_think else "fast"
-    print(f"[ollama] POST {url} model={model} num_predict={options.get('num_predict')} mode={mode}", flush=True)
+    print(f"[ollama] POST {url} model={model} num_ctx={options.get('num_ctx')} num_predict={options.get('num_predict')} mode={mode}", flush=True)
     try:
         read_timeout = 180 if deep_think else 120
         with requests.post(url, json=payload, stream=True, timeout=(15, read_timeout)) as r:
@@ -1156,21 +1157,22 @@ async def health():
 @app.get("/models")
 async def get_models():
     """Return available models and the currently active one."""
-    return {"models": AVAILABLE_MODELS, "active": _ollama_state["model"]}
+    return {"models": AVAILABLE_MODELS, "active": _ollama_state["model"], "num_ctx": _ollama_state["num_ctx"]}
 
 
 @app.post("/model")
 async def set_model(body: dict):
-    """Switch the active LLM model at runtime."""
+    """Switch the active LLM model and/or num_ctx at runtime."""
     model = (body.get("model") or "").strip()
-    if not model:
-        return JSONResponse({"error": "model is required"}, status_code=400)
-    _ollama_state["model"] = model
-    # Add to available list if not already there
-    if model not in AVAILABLE_MODELS:
-        AVAILABLE_MODELS.append(model)
-    print(f"[model] Switched to: {model}", flush=True)
-    return {"active": model}
+    num_ctx = body.get("num_ctx")
+    if model:
+        _ollama_state["model"] = model
+        if model not in AVAILABLE_MODELS:
+            AVAILABLE_MODELS.append(model)
+    if num_ctx is not None:
+        _ollama_state["num_ctx"] = int(num_ctx)
+    print(f"[model] Config: model={_ollama_state['model']} num_ctx={_ollama_state['num_ctx']}", flush=True)
+    return {"active": _ollama_state["model"], "num_ctx": _ollama_state["num_ctx"]}
 
 
 @app.post("/transcribe")
@@ -1221,6 +1223,7 @@ def _is_action_request(msg: str) -> bool:
 
 @app.post("/chat")
 async def chat(body: dict):
+    t_start = time.time()
     user_msg = (body.get("message") or "").strip()
     session_id = (body.get("session_id") or "default").strip()
     deep_think = bool(body.get("deep_think", False))
@@ -1558,7 +1561,9 @@ async def chat(body: dict):
     # Feature 2: Persist assistant reply to session
     _append_session(session_id, "assistant", spoken)
 
-    result = {"reply": spoken, "model": _ollama_state["model"]}
+    elapsed = round(time.time() - t_start, 2)
+    print(f"[chat] Done in {elapsed}s (model={_ollama_state['model']})", flush=True)
+    result = {"reply": spoken, "model": _ollama_state["model"], "elapsed_s": elapsed}
     if ha_result is not None:
         result["ha_result"] = ha_result
         result["entity_id"] = cmd_entity_id

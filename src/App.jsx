@@ -264,6 +264,7 @@ export default function App() {
   // Model selector
   const [availableModels, setAvailableModels] = useState([]);
   const [activeModel, setActiveModel] = useState("");
+  const [numCtx, setNumCtx] = useState(2048);
   // Feature 5: wake word
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const wakeWordRef = useRef(false);
@@ -353,16 +354,18 @@ export default function App() {
       .then(d => {
         setAvailableModels(d.models || []);
         setActiveModel(d.active || "");
+        if (d.num_ctx) setNumCtx(d.num_ctx);
       })
       .catch(() => {});
   }, []);
 
-  const switchModel = (model) => {
-    setActiveModel(model);
+  const switchModel = (model, ctx) => {
+    if (model) setActiveModel(model);
+    if (ctx) setNumCtx(ctx);
     fetch(`${API}/model`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify({ model: model || activeModel, num_ctx: ctx || numCtx }),
     }).catch(() => {});
   };
 
@@ -809,7 +812,7 @@ export default function App() {
       const reply = data.reply || "";
 
       // Build bot message with all metadata
-      const botMsg = { role: "bot", text: reply, model: data.model || "" };
+      const botMsg = { role: "bot", text: reply, model: data.model || "", elapsed: data.elapsed_s };
       if (data.ha_result) {
         botMsg.haResult = data.ha_result;
         setLastHaEvent({ ...data.ha_result, entity_id: data.entity_id || "" });
@@ -952,7 +955,7 @@ export default function App() {
                         <div style={{ fontSize: '0.6rem', color: 'var(--navy-400)', marginBottom: '2px', fontFamily: 'JetBrains Mono', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                           <span>{msg.role === 'user' ? 'YOU' : 'SKY'}</span>
                           {msg.role === 'bot' && msg.model && (
-                            <span style={{ fontSize: '0.5rem', color: 'var(--navy-500)', background: 'var(--navy-800)', padding: '1px 5px', borderRadius: '3px' }}>{msg.model.split('/').pop()}</span>
+                            <span style={{ fontSize: '0.5rem', color: 'var(--navy-500)', background: 'var(--navy-800)', padding: '1px 5px', borderRadius: '3px' }}>{msg.model.split('/').pop()}{msg.elapsed ? ` · ${msg.elapsed}s` : ''}</span>
                           )}
                         </div>
                         <div>{msg.text || "..."}</div>
@@ -1164,7 +1167,7 @@ export default function App() {
                     <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>LLM Model</div>
                     <select
                       value={activeModel}
-                      onChange={e => switchModel(e.target.value)}
+                      onChange={e => switchModel(e.target.value, null)}
                       style={{
                         width: '100%', background: 'var(--navy-800)', color: 'var(--amber-400)',
                         border: '1px solid var(--navy-600)', borderRadius: '6px', padding: '0.5rem',
@@ -1175,6 +1178,22 @@ export default function App() {
                         <option key={m} value={m}>{m.split('/').pop()}</option>
                       ))}
                     </select>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem' }}>
+                      <span style={{ fontSize: '0.6rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>CTX</span>
+                      <select
+                        value={numCtx}
+                        onChange={e => switchModel(null, Number(e.target.value))}
+                        style={{
+                          flex: 1, background: 'var(--navy-800)', color: 'var(--amber-400)',
+                          border: '1px solid var(--navy-600)', borderRadius: '6px', padding: '0.5rem',
+                          fontSize: '0.75rem', fontFamily: 'JetBrains Mono', cursor: 'pointer',
+                        }}
+                      >
+                        {[512, 1024, 2048, 4096, 8192].map(v => (
+                          <option key={v} value={v}>{v}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 )}
                 <a href="http://192.168.254.131:8123" target="_blank" rel="noopener noreferrer"
@@ -1244,7 +1263,7 @@ export default function App() {
               {availableModels.length > 0 && (
                 <select
                   value={activeModel}
-                  onChange={e => switchModel(e.target.value)}
+                  onChange={e => switchModel(e.target.value, null)}
                   style={{
                     background: 'var(--navy-800)', color: 'var(--amber-400)', border: '1px solid var(--navy-600)',
                     borderRadius: '4px', padding: '0.25rem 0.3rem', fontSize: '0.6rem',
@@ -1256,6 +1275,22 @@ export default function App() {
                   ))}
                 </select>
               )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem' }}>
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>CTX</span>
+                <select
+                  value={numCtx}
+                  onChange={e => switchModel(null, Number(e.target.value))}
+                  style={{
+                    flex: 1, background: 'var(--navy-800)', color: 'var(--amber-400)', border: '1px solid var(--navy-600)',
+                    borderRadius: '4px', padding: '0.2rem 0.3rem', fontSize: '0.6rem',
+                    fontFamily: 'JetBrains Mono', cursor: 'pointer',
+                  }}
+                >
+                  {[512, 1024, 2048, 4096, 8192].map(v => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="sidebar-stat">
               <span>WHISPER</span>
@@ -1544,7 +1579,7 @@ export default function App() {
                         <div className="msg-meta" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                           <span>{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</span>
                           {msg.role === 'bot' && msg.model && (
-                            <span style={{ fontSize: '0.55rem', color: 'var(--navy-400)', background: 'var(--navy-800)', padding: '1px 5px', borderRadius: '3px', fontWeight: 'normal' }}>{msg.model.split('/').pop()}</span>
+                            <span style={{ fontSize: '0.55rem', color: 'var(--navy-400)', background: 'var(--navy-800)', padding: '1px 5px', borderRadius: '3px', fontWeight: 'normal' }}>{msg.model.split('/').pop()}{msg.elapsed ? ` · ${msg.elapsed}s` : ''}</span>
                           )}
                         </div>
                         <div className="bubble">
