@@ -229,6 +229,11 @@ export default function Dashboard({ api }) {
     return buildFarmInsightsFromHA(farmEntities);
   }, [groups]);
 
+  const canvasDevices = useMemo(() => {
+    const all = Object.values(groups).flat();
+    return all.filter(e => e.entity_id?.startsWith("sensor.canvas_"));
+  }, [groups]);
+
   const callService = async (domain, service, entity_id, extra = {}) => {
     try {
       const r = await fetch(`${api}/ha/service`, {
@@ -354,6 +359,47 @@ export default function Dashboard({ api }) {
           </div>
         )}
       </div>
+
+      {/* ── Canvas Devices Panel ── */}
+      {canvasDevices.length > 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <div className="db-section-title">
+            <span>⬡</span>
+            <span>CANVAS DEVICES</span>
+            <span style={{ marginLeft: "auto", color: "var(--navy-400)", fontSize: "0.65rem" }}>
+              {canvasDevices.length} virtual device{canvasDevices.length !== 1 ? "s" : ""} · synced from Node Canvas
+            </span>
+          </div>
+          <div className="db-grid">
+            {canvasDevices.map(e => {
+              const isOn = ["on", "open", "unlocked"].includes(e.state);
+              const dtype = e.attributes?.device_type || "sensor";
+              const icon = { light: "💡", irrigation: "🌊", camera: "📷", tensiometer: "💧", rainpoint: "🌱" }[dtype] || "⬡";
+              const domain = e.entity_id.split(".")[0];
+              const actions = DOMAIN_ACTIONS[domain] || [];
+              return (
+                <div className={`db-card ${isOn ? "on" : "off"}`} key={e.entity_id}
+                  style={{ borderLeft: "3px solid #60a5fa" }}>
+                  <div className="db-card-name" title={e.name}>{icon} {e.name}</div>
+                  <div className="db-card-id">{e.entity_id}</div>
+                  <div className="db-card-state" style={{ color: STATE_COLOR(e.state) }}>{e.state}</div>
+                  {e.attributes?.friendly_name && e.attributes.friendly_name !== e.name && (
+                    <div className="db-card-attr">{e.attributes.friendly_name}</div>
+                  )}
+                  {actions.length > 0 && (
+                    <div className="db-btns">
+                      {actions.map(([svc, label]) => (
+                        <button key={svc} className="db-btn"
+                          onClick={() => callService(domain, svc, e.entity_id)}>{label}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="db-toolbar">
         <h1>⊞ HOME DASHBOARD</h1>
