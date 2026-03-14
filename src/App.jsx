@@ -1008,6 +1008,13 @@ export default function App() {
                     <span className={`dot ${s.ok ? 'dot-green' : 'dot-red'}`} />
                   </div>
                 ))}
+                <a href="http://192.168.254.131:8123" target="_blank" rel="noopener noreferrer"
+                  style={{ display: 'block', textAlign: 'center', marginTop: '0.75rem', padding: '0.6rem', borderRadius: '8px',
+                    border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.08)',
+                    color: '#60a5fa', fontSize: '0.75rem', fontFamily: 'JetBrains Mono',
+                    textDecoration: 'none' }}>
+                  🏠 Open HA Dashboard
+                </a>
               </div>
             ) : null}
           </div>
@@ -1077,6 +1084,13 @@ export default function App() {
               <span>VOICE ENGINE</span>
               <span style={{ color: 'var(--amber-400)', fontSize: '0.65rem' }}>KOKORO</span>
             </div>
+            <a href="http://192.168.254.131:8123" target="_blank" rel="noopener noreferrer"
+              style={{ display: 'block', textAlign: 'center', marginTop: '0.5rem', padding: '0.35rem', borderRadius: '6px',
+                border: '1px solid var(--navy-600)', background: 'rgba(59,130,246,0.08)',
+                color: '#60a5fa', fontSize: '0.65rem', fontFamily: 'JetBrains Mono', letterSpacing: '0.5px',
+                textDecoration: 'none', cursor: 'pointer' }}>
+              🏠 HA DASHBOARD
+            </a>
             {/* Feature 5: Wake word toggle */}
             <div style={{ marginTop: '0.75rem' }}>
               <button onClick={() => wakeWordEnabled ? stopWakeWord() : startWakeWord()}
