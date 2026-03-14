@@ -956,11 +956,30 @@ async def transcribe(audio: UploadFile = File(...)):
         os.unlink(tmp_path)
 
 
+def _is_action_request(msg: str) -> bool:
+    """Detect if the user message looks like a device command that needs structured output."""
+    m = msg.lower()
+    action_verbs = [
+        "turn on", "turn off", "switch on", "switch off", "shut off",
+        "toggle", "activate", "deactivate", "enable", "disable",
+        "start", "stop", "open", "close", "lock", "unlock",
+        "set the", "set temperature", "irrigate", "water zone",
+        "dim", "brighten", "arm", "disarm",
+    ]
+    # Also match "<duration> minute/hour" patterns that imply timed actions
+    has_duration = bool(re.search(r"\d+\s*(?:min|hour|hr|sec)", m))
+    return any(v in m for v in action_verbs) or has_duration
+
+
 @app.post("/chat")
 async def chat(body: dict):
     user_msg = (body.get("message") or "").strip()
     session_id = (body.get("session_id") or "default").strip()
     deep_think = bool(body.get("deep_think", False))
+    # Auto-enable thinking for action commands (user can still force it via toggle)
+    if not deep_think and _is_action_request(user_msg):
+        deep_think = True
+        print(f"[chat] Auto-enabled deep think for action request: {user_msg[:60]}", flush=True)
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
