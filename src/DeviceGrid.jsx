@@ -37,6 +37,9 @@ function getEntityMeta(entityId) {
   return ICON_MAP[domain] || { icon: "📦", color: "#94a3b8" };
 }
 
+// Domains that support on/off toggle
+const TOGGLEABLE_DOMAINS = new Set(["light", "switch", "input_boolean", "fan", "cover", "climate", "automation", "script", "scene"]);
+
 // Map entity_id domain to canvas node type for /canvas/sync
 const DOMAIN_TO_NODE_TYPE = {
   light: "light",
@@ -117,6 +120,25 @@ const gridStyles = `
   border-color: var(--amber-500);
   color: var(--amber-400);
 }
+
+.device-toggle {
+  display: flex; align-items: center; gap: 0.3rem;
+  margin-top: 0.35rem; padding-top: 0.35rem;
+  border-top: 1px solid var(--navy-700);
+}
+.toggle-btn {
+  flex: 1; padding: 0.3rem 0; border-radius: 5px;
+  font-size: 0.58rem; font-family: 'JetBrains Mono', monospace;
+  font-weight: 600; letter-spacing: 0.5px;
+  cursor: pointer; border: 1px solid var(--navy-600);
+  background: var(--navy-800); color: var(--text-dim);
+  transition: all 0.15s;
+}
+.toggle-btn:hover { border-color: var(--navy-400); color: var(--text-bright); }
+.toggle-btn.on { background: rgba(74,222,128,0.12); border-color: rgba(74,222,128,0.4); color: #4ade80; }
+.toggle-btn.on:hover { background: rgba(74,222,128,0.2); }
+.toggle-btn.off { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.3); color: #f87171; }
+.toggle-btn.off:hover { background: rgba(248,113,113,0.15); }
 
 .entity-picker-overlay {
   position: fixed; inset: 0; z-index: 9990;
@@ -251,6 +273,24 @@ export default function DeviceGrid({ api, lastHaEvent }) {
     setDevices(prev => prev.filter(d => d.entity_id !== entityId));
   }, []);
 
+  const toggleDevice = useCallback(async (dev, action) => {
+    if (!api) return;
+    const domain = dev.entity_id.split(".")[0];
+    const slug = dev.entity_id.split(".").slice(1).join(".");
+    // Determine which entity to call — prefer input_boolean if it exists
+    const ibEid = `input_boolean.${slug}`;
+    const useIb = haStates[ibEid] !== undefined;
+    const targetEid = useIb ? ibEid : dev.entity_id;
+    const targetDomain = useIb ? "input_boolean" : domain;
+    try {
+      await fetch(`${api}/ha/service`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: `${targetDomain}.${action}`, entity_id: targetEid }),
+      });
+    } catch {}
+  }, [api, haStates]);
+
   const addDevice = useCallback((entity) => {
     const meta = getEntityMeta(entity.entity_id);
     const name = entity.attributes?.friendly_name || entity.entity_id.split(".").pop().replace(/_/g, " ");
@@ -313,6 +353,16 @@ export default function DeviceGrid({ api, lastHaEvent }) {
                   {ha ? (state === "unavailable" ? "⚠ UNAVAIL" : "✓ SYNCED") : "? NOT FOUND"}
                 </span>
               </div>
+              {TOGGLEABLE_DOMAINS.has(dev.entity_id.split(".")[0]) && (
+                <div className="device-toggle">
+                  <button className={`toggle-btn${isOn ? " on" : ""}`} onClick={() => toggleDevice(dev, "turn_on")}>
+                    ON
+                  </button>
+                  <button className={`toggle-btn${!isOn && state === "off" ? " off" : ""}`} onClick={() => toggleDevice(dev, "turn_off")}>
+                    OFF
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
