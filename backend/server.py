@@ -1407,17 +1407,36 @@ async def chat(body: dict):
     print(f"[chat] extract_all_ha_commands → {len(all_cmds)} commands", flush=True)
     print(f"[chat] extract_all_timers → {len(all_timers)} timers", flush=True)
 
-    # Schedule any timers not already handled in tool chaining
-    if all_timers and timer_info is None:
+    # Schedule ALL timers, skipping any already handled in tool chaining above
+    already_scheduled = {timer_info["entity_id"]} if timer_info else set()
+    if all_timers:
         for tcfg in all_timers:
+            if tcfg["entity_id"] in already_scheduled:
+                continue
             try:
                 tid = await schedule_timer(tcfg["entity_id"], tcfg["minutes"], tcfg["domain"])
-                # Keep the first timer as the primary for response
+                already_scheduled.add(tcfg["entity_id"])
                 if timer_info is None:
                     timer_info = {"entity_id": tcfg["entity_id"], "minutes": tcfg["minutes"], "timer_id": tid}
                 print(f"[chat] Scheduled timer: {tcfg['entity_id']} for {tcfg['minutes']:.2f}min", flush=True)
             except Exception as te:
                 print(f"[chat] Timer schedule failed: {te}", flush=True)
+
+    # Fallback: if we have multiple turn-on commands but fewer timers, propagate
+    # the timer duration to all commands that don't have one yet.
+    # e.g. "turn on zones 1, 2, 3 for 30 seconds" — LLM might only emit 1 TIMER tag
+    if all_timers and all_cmds and len(already_scheduled) < len(all_cmds):
+        ref_timer = all_timers[0]  # use first timer as reference for duration/domain
+        for cmd in all_cmds:
+            eid = cmd.get("entity_id", "")
+            if eid and eid not in already_scheduled and "turn_on" in cmd.get("action", ""):
+                domain = eid.split(".")[0] if "." in eid else ref_timer["domain"]
+                try:
+                    tid = await schedule_timer(eid, ref_timer["minutes"], domain)
+                    already_scheduled.add(eid)
+                    print(f"[chat] Auto-propagated timer to {eid} for {ref_timer['minutes']:.2f}min", flush=True)
+                except Exception as te:
+                    print(f"[chat] Timer propagation failed for {eid}: {te}", flush=True)
 
     # ── Extraction re-prompt: if the response looks like an action confirmation but
     #    has no JSON command, ask the LLM a quick focused question to extract it ──
