@@ -53,6 +53,9 @@ services:
       - HA_URL=${HA_URL:-http://homeassistant:8123}
       - HA_TOKEN=${HA_TOKEN:-}
       - TZ=${TZ:-America/New_York}
+      - PERSONA_NAME=${PERSONA_NAME:-Sky}
+      - PERSONA_STYLE=${PERSONA_STYLE:-warm, direct, practical farm advisor}
+      - PERSONA_NOTES=${PERSONA_NOTES:-}
     deploy:
       resources:
         reservations:

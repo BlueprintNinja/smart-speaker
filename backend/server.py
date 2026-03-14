@@ -12,12 +12,14 @@ import re
 import json
 import time
 import wave
+import uuid
 import base64
 import tempfile
 import asyncio
 import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import numpy as np
 import requests
@@ -41,8 +43,20 @@ GPU_CONCURRENCY = int(os.getenv("GPU_CONCURRENCY", "1"))
 HA_URL   = os.getenv("HA_URL",   "http://localhost:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 
-# ── System prompt ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a helpful, concise home and farm voice assistant with deep Home Assistant integration.
+# ── Persona config (feature 8) ────────────────────────────────────────────────
+PERSONA_NAME  = os.getenv("PERSONA_NAME",  "Sky")
+PERSONA_STYLE = os.getenv("PERSONA_STYLE", "warm, direct, practical farm advisor")
+PERSONA_NOTES = os.getenv("PERSONA_NOTES", "")  # extra instructions injected into system prompt
+
+# ── APScheduler (feature 6) ───────────────────────────────────────────────────
+scheduler = AsyncIOScheduler()
+
+# ── System prompt (rebuilt per-request to include live persona settings) ──────
+def _build_system_prompt() -> str:
+    persona_block = f"You are {PERSONA_NAME}, a {PERSONA_STYLE} with deep Home Assistant integration."
+    if PERSONA_NOTES:
+        persona_block += f"\n{PERSONA_NOTES}"
+    return persona_block + """
 
 When the user asks you to control a device or trigger an action, ALWAYS include a JSON command block
 in your response using exactly this format:
@@ -60,6 +74,8 @@ CRITICAL RULES:
 - NEVER use bullet points, numbered lists, markdown headers, or asterisks. Plain prose only.
 - If asked about multiple sensor values, pick the 1-2 most important ones and mention them naturally.
 - Be direct. "Soil moisture is at 34%, trending down over the last 3 days." not a full status report.
+- Address Ray by name when appropriate.
+- When you make a farm recommendation (spray, irrigate, apply frost protection), state it clearly.
 
 == LIGHTS ==
   light.turn_on, light.turn_off, light.toggle
@@ -136,7 +152,25 @@ RULES for FETCH_TREND:
 - Use ONLY the tool tag on its own line — do not add any other text before or after it.
 - The system will fetch real historical data and call you again with the results.
 - Default to 72 hours if the user doesn't specify a timeframe.
-- Common timeframes: "today"=24h, "this week"=168h, "yesterday"=48h, "last few days"=72h"""
+- Common timeframes: "today"=24h, "this week"=168h, "yesterday"=48h, "last few days"=72h
+
+== TIMER TOOL (feature 6) ==
+When the user asks you to run something for a set duration (irrigation, lights, etc.), after sending the
+JSON command to turn it on, also emit a TIMER tag to schedule automatic turn-off:
+
+[TIMER: <entity_id>, <minutes>, <domain>]
+
+Examples:
+- "Turn on zone 1 for 30 minutes" → JSON turn_on + [TIMER: switch.irrigation_zone_1, 30, switch]
+- "Turn on barn lights for 1 hour" → JSON turn_on + [TIMER: light.barn_lights, 60, light]
+
+RULES for TIMER:
+- Always include the domain so the auto-off fires the correct service.
+- Confirm the duration verbally: "Turning on zone 1 for 30 minutes, Ray — I'll turn it off automatically."
+- Do NOT emit TIMER for actions that don't have a natural end (locks, scenes, thermostat setpoints)."""
+
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 
 # ── GPU concurrency lock ──────────────────────────────────────────────────────
@@ -167,7 +201,13 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(60)
             await _refresh_ha_cache()
     asyncio.ensure_future(_cache_loop())
+    # Start APScheduler for timed device actions and daily digest
+    scheduler.start()
+    # Schedule daily farm digest at 7:00 AM local time
+    scheduler.add_job(_daily_digest_job, "cron", hour=7, minute=0, id="daily_digest", replace_existing=True)
+    print("[startup] APScheduler started.", flush=True)
     yield
+    scheduler.shutdown(wait=False)
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -240,9 +280,6 @@ def _ollama_chat_stream(messages: list[dict], options: dict):
         raise
 
 
-# ── Conversation history ───────────────────────────────────────────────────────
-conversation: list[dict] = []
-
 # ── HA entity cache (refreshed in background every 60s) ───────────────────────
 _ha_entity_cache: list[dict] = []
 _ha_entity_cache_ts: float = 0.0
@@ -270,26 +307,141 @@ def _load_memory() -> dict:
             return json.loads(MEMORY_PATH.read_text())
         except Exception:
             pass
-    return {"events": [], "observations": [], "spray_log": [], "notes": []}
+    return {"events": [], "observations": [], "spray_log": [], "notes": [], "decisions": []}
 
 def _save_memory(mem: dict):
     MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     MEMORY_PATH.write_text(json.dumps(mem, indent=2))
 
-def _memory_summary(mem: dict) -> str:
-    lines = []
+
+def _entry_text(entry: dict | str) -> str:
+    """Flatten a memory entry (dict or str) to a single searchable string."""
+    if isinstance(entry, str):
+        return entry
+    parts = []
+    for k in ("product", "note", "description", "type", "sensor", "recommendation", "outcome", "title"):
+        v = entry.get(k)
+        if v:
+            parts.append(str(v))
+    return " ".join(parts).lower()
+
+
+def _search_memory(mem: dict, query: str, top_n: int = 6) -> str:
+    """
+    Feature 1: Contextual memory retrieval.
+    Score every memory entry against the query by keyword overlap,
+    return the top_n most relevant entries as a compact summary string.
+    Falls back to most-recent entries when query is empty.
+    """
+    query_words = set(re.findall(r"\w+", query.lower())) - {"the", "a", "is", "what", "when", "did", "i", "you", "it", "was"}
+
+    scored: list[tuple[float, str, str]] = []  # (score, category, text)
+
+    def score_and_add(category: str, entries: list, fmt_fn):
+        for entry in entries:
+            text = _entry_text(entry)
+            if query_words:
+                entry_words = set(re.findall(r"\w+", text))
+                score = len(query_words & entry_words) / max(len(query_words), 1)
+            else:
+                score = 0.0
+            date = entry.get("date", "")[:10] if isinstance(entry, dict) else ""
+            scored.append((score, category, f"[{date}] {fmt_fn(entry)}" if date else fmt_fn(entry)))
+
+    def fmt_spray(e):
+        return f"Spray: {e.get('product','?')} @ {e.get('rate','?')} — {e.get('notes','')}"
+    def fmt_obs(e):
+        return f"Observation: {e.get('note','?')} (GDD {e.get('gdd','?')})"
+    def fmt_event(e):
+        return f"Event [{e.get('type','?')}]: {e.get('description', e.get('sensor',''))} → {e.get('state','')}"
+    def fmt_note(e):
+        return f"Note: {e}" if isinstance(e, str) else f"Note: {e}"
+    def fmt_decision(e):
+        outcome = f" → Outcome: {e['outcome']}" if e.get("outcome") else " (pending outcome)"
+        return f"Recommendation: {e.get('recommendation','?')}{outcome}"
+
+    score_and_add("spray",     mem.get("spray_log", []),  fmt_spray)
+    score_and_add("obs",       mem.get("observations", []), fmt_obs)
+    score_and_add("event",     mem.get("events", []),     fmt_event)
+    score_and_add("note",      mem.get("notes", []),      fmt_note)
+    score_and_add("decision",  mem.get("decisions", []),  fmt_decision)
+
+    # Sort by score desc, then take top_n; always include at least the 2 most recent of each major type
+    scored.sort(key=lambda x: x[0], reverse=True)
+    selected = [s[2] for s in scored[:top_n]]
+
+    # Always append the very last spray if not already included (high farming relevance)
     if mem.get("spray_log"):
-        last = mem["spray_log"][-1]
-        lines.append(f"Last spray: {last.get('date','?')} — {last.get('product','?')}")
-    if mem.get("observations"):
-        last = mem["observations"][-1]
-        lines.append(f"Last observation: {last.get('date','?')} — {last.get('note','?')}")
-    if mem.get("events"):
-        recent = mem["events"][-3:]
-        lines.append("Recent events: " + "; ".join(f"{e.get('type','?')} ({e.get('date','?')})" for e in recent))
-    if mem.get("notes"):
-        lines.append("Notes: " + " | ".join(mem["notes"][-3:]))
-    return "\n".join(lines) if lines else "No memory entries yet."
+        last_spray = fmt_spray(mem["spray_log"][-1])
+        tail = f"[{mem['spray_log'][-1].get('date','')[:10]}] {last_spray}"
+        if tail not in selected:
+            selected.append(tail)
+
+    return "\n".join(selected) if selected else "No memory entries yet."
+
+
+def _memory_summary(mem: dict, query: str = "") -> str:
+    """Wrapper kept for backward-compat — now uses contextual retrieval."""
+    return _search_memory(mem, query)
+
+
+# ── Session store (feature 2) — per-session conversation history ───────────────
+SESSIONS_PATH = Path("/app/data/sessions.json")
+_sessions: dict[str, list[dict]] = {}   # session_id -> message list
+
+def _load_sessions():
+    global _sessions
+    if SESSIONS_PATH.exists():
+        try:
+            _sessions = json.loads(SESSIONS_PATH.read_text())
+        except Exception:
+            _sessions = {}
+
+def _save_sessions():
+    SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Keep only last 20 sessions, max 40 messages each to avoid unbounded growth
+    trimmed = {k: v[-40:] for k, v in list(_sessions.items())[-20:]}
+    SESSIONS_PATH.write_text(json.dumps(trimmed))
+
+def _get_session(session_id: str) -> list[dict]:
+    if session_id not in _sessions:
+        # Seed new session with latest farm context if available
+        farm_ctx = _sessions.get("__farm_context__", [])
+        _sessions[session_id] = list(farm_ctx)
+    return _sessions[session_id]
+
+def _append_session(session_id: str, role: str, content: str):
+    _sessions.setdefault(session_id, []).append({"role": role, "content": content})
+    _save_sessions()
+
+_load_sessions()
+
+
+# ── Decision journal (feature 3) ───────────────────────────────────────────────
+RECOMMENDATION_KEYWORDS = [
+    "recommend", "suggest", "you should", "you need to", "consider", "apply",
+    "spray", "irrigate", "turn on", "activate", "protect", "check", "monitor",
+]
+
+def _maybe_log_recommendation(text: str, context: str = ""):
+    """If the LLM response contains a farm recommendation, log it to decisions[]."""
+    lower = text.lower()
+    if not any(kw in lower for kw in RECOMMENDATION_KEYWORDS):
+        return
+    # Extract first sentence as the recommendation
+    first_sentence = re.split(r"[.!?]", text.strip())[0].strip()
+    if len(first_sentence) < 15:
+        return
+    mem = _load_memory()
+    mem.setdefault("decisions", []).append({
+        "date": datetime.datetime.now().isoformat(),
+        "recommendation": first_sentence,
+        "context": context[:200],
+        "outcome": None,
+    })
+    # Keep only last 50 decisions
+    mem["decisions"] = mem["decisions"][-50:]
+    _save_memory(mem)
 
 
 # ── Home Assistant helpers ─────────────────────────────────────────────────────
@@ -406,10 +558,136 @@ def strip_command_block(text: str) -> str:
     text = re.sub(r"```json\s*\{.*?\}\s*```", "", text, flags=re.DOTALL)
     # Remove bare JSON objects (starting with { containing "action": )
     text = re.sub(r"\{[^{}]*\"action\"[^{}]*\}", "", text, flags=re.DOTALL)
+    # Remove tool tags
+    text = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", text)
+    text = re.sub(r"\[TIMER:[^\]]+\]", "", text)
     # Clean up leftover punctuation/whitespace artefacts like trailing ". " or double spaces
     text = re.sub(r"\s{2,}", " ", text)
     text = re.sub(r"\.\s*\.", ".", text)
     return text.strip()
+
+
+def extract_timer(llm_response: str) -> dict | None:
+    """Parse [TIMER: entity_id, minutes, domain] from LLM response."""
+    match = re.search(r"\[TIMER:\s*([^,\]]+),\s*(\d+(?:\.\d+)?),\s*([^\]]+)\]", llm_response)
+    if not match:
+        return None
+    return {
+        "entity_id": match.group(1).strip(),
+        "minutes": float(match.group(2).strip()),
+        "domain": match.group(3).strip(),
+    }
+
+
+async def _timer_auto_off(entity_id: str, domain: str):
+    """Called by APScheduler after timer expires — turns entity off and logs a spoken reminder."""
+    print(f"[timer] Auto-off firing for {entity_id} ({domain})", flush=True)
+    result = await ha_call_service(domain, "turn_off", entity_id)
+    spoken = f"Hey Ray, the timer has expired — {entity_id.split('.')[-1].replace('_', ' ')} has been turned off."
+    # Log as an event
+    mem = _load_memory()
+    mem.setdefault("events", []).append({
+        "date": datetime.datetime.now().isoformat(),
+        "type": "timer_expired",
+        "sensor": entity_id,
+        "state": "off",
+        "severity": "info",
+    })
+    _save_memory(mem)
+    # Generate TTS for the reminder and store it so frontend can pick it up
+    try:
+        loop = asyncio.get_event_loop()
+        async with GPU_LOCK:
+            wav_bytes, _ = await loop.run_in_executor(None, lambda: synth_wav_bytes(spoken))
+        _pending_timer_alerts.append({
+            "text": spoken,
+            "audio_b64": base64.b64encode(wav_bytes).decode(),
+            "entity_id": entity_id,
+            "severity": "info",
+        })
+    except Exception as e:
+        print(f"[timer] TTS failed: {e}", flush=True)
+        _pending_timer_alerts.append({"text": spoken, "audio_b64": None, "entity_id": entity_id, "severity": "info"})
+
+
+def schedule_timer(entity_id: str, minutes: float, domain: str) -> str:
+    """Schedule an auto-off job. Returns a job_id."""
+    job_id = f"timer_{entity_id}_{int(time.time())}"
+    run_at = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
+    scheduler.add_job(
+        _timer_auto_off, "date", run_date=run_at,
+        args=[entity_id, domain], id=job_id, replace_existing=True,
+    )
+    print(f"[timer] Scheduled auto-off for {entity_id} in {minutes}min (job={job_id})", flush=True)
+    return job_id
+
+
+# Pending timer alerts — polled by /alerts/pending endpoint
+_pending_timer_alerts: list[dict] = []
+
+
+# ── Daily digest job (feature 7) ──────────────────────────────────────────────
+_last_digest_date: str = ""
+_latest_digest: dict | None = None
+
+
+async def _daily_digest_job():
+    """Generate a morning farm briefing at 7 AM. Stored for frontend polling."""
+    global _last_digest_date, _latest_digest
+    today = datetime.date.today().isoformat()
+    if _last_digest_date == today:
+        return
+    _last_digest_date = today
+    print("[digest] Generating daily farm digest...", flush=True)
+
+    # Pull current farm sensor states from HA
+    entities = _get_cached_ha_entities()
+    farm_entities = [e for e in entities if e["entity_id"].startswith("sensor.farm_")]
+    sensor_lines = "\n".join(
+        f"  {e['entity_id']}: {e['state']} {e.get('attributes', {}).get('unit_of_measurement', '')}"
+        for e in farm_entities
+    )
+
+    # Pull memory for context
+    mem = _load_memory()
+    mem_ctx = _search_memory(mem, "morning farm status spray irrigation")
+
+    prompt_msgs = [
+        {"role": "system", "content": f"""You are {PERSONA_NAME}, Ray's farm AI advisor.
+Generate a concise morning farm briefing (3-4 sentences max) covering the most important items for the day.
+Include: growth stage, any critical risks, spray window status, recommended actions.
+Be direct, spoken-language only. Start with 'Good morning, Ray.'
+Today's date: {today}
+Farm sensors:\n{sensor_lines or 'No sensor data available yet.'}
+Recent farm memory:\n{mem_ctx}"""},
+        {"role": "user", "content": "Give me today's morning farm briefing."},
+    ]
+
+    loop = asyncio.get_event_loop()
+    try:
+        def _gen():
+            return "".join(_ollama_chat_stream(prompt_msgs, {"temperature": 0.4, "num_predict": 150}))
+        brief = await loop.run_in_executor(None, _gen)
+        brief = strip_markdown_for_tts(brief)
+    except Exception as e:
+        brief = f"Good morning, Ray. Farm sensors are online. Check the dashboard for today's conditions."
+        print(f"[digest] LLM failed: {e}", flush=True)
+
+    # Generate TTS
+    audio_b64 = None
+    try:
+        async with GPU_LOCK:
+            wav_bytes, _ = await loop.run_in_executor(None, lambda: synth_wav_bytes(brief))
+        audio_b64 = base64.b64encode(wav_bytes).decode()
+    except Exception:
+        pass
+
+    _latest_digest = {"date": today, "text": brief, "audio_b64": audio_b64}
+    # Log to memory
+    mem = _load_memory()
+    mem.setdefault("events", []).append({"date": datetime.datetime.now().isoformat(), "type": "daily_digest", "description": brief[:120]})
+    _save_memory(mem)
+    print(f"[digest] Done for {today}.", flush=True)
 
 
 # ── Markdown → plain text for TTS ────────────────────────────────────────────
@@ -522,15 +800,20 @@ async def transcribe(audio: UploadFile = File(...)):
 @app.post("/chat")
 async def chat(body: dict):
     user_msg = (body.get("message") or "").strip()
+    session_id = (body.get("session_id") or "default").strip()
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
-    # Inject Sky memory into prompt
+    # Feature 1: Contextual memory retrieval — score entries against this query
     mem = _load_memory()
-    mem_summary = _memory_summary(mem)
+    mem_summary = _search_memory(mem, user_msg)
+
+    # Feature 2: Session-aware conversation history
+    session_history = _get_session(session_id)
 
     # Use cached HA entities — never block /chat on a live HA fetch
     ha_entities = _get_cached_ha_entities()
+    dynamic_prompt = _build_system_prompt()
     if ha_entities:
         ACTIONABLE_DOMAINS = {"light", "switch", "cover", "lock", "climate", "fan", "scene", "script", "automation", "input_boolean"}
         lines = []
@@ -541,16 +824,13 @@ async def chat(body: dict):
             name = (e.get("attributes") or {}).get("friendly_name") or e["entity_id"]
             state = e.get("state", "")
             lines.append(f"  {e['entity_id']} — \"{name}\" [{state}]")
-        entity_block = "\n== YOUR HOME ASSISTANT ENTITIES (use these exact entity_ids) ==\n" + "\n".join(lines)
-        dynamic_prompt = SYSTEM_PROMPT + entity_block
-    else:
-        dynamic_prompt = SYSTEM_PROMPT
+        dynamic_prompt += "\n== YOUR HOME ASSISTANT ENTITIES (use these exact entity_ids) ==\n" + "\n".join(lines)
 
     if mem_summary and mem_summary != "No memory entries yet.":
-        dynamic_prompt += f"\n\n== SKY MEMORY (farm history you recorded) ==\n{mem_summary}"
+        dynamic_prompt += f"\n\n== SKY MEMORY (relevant farm history) ==\n{mem_summary}"
 
-    conversation.append({"role": "user", "content": user_msg})
-    messages = [{"role": "system", "content": dynamic_prompt}] + conversation
+    _append_session(session_id, "user", user_msg)
+    messages = [{"role": "system", "content": dynamic_prompt}] + session_history
 
     async def generate():
         full = ""
@@ -568,26 +848,27 @@ async def chat(body: dict):
             else:
                 full = "".join(tokens)
 
-                # ── FETCH_TREND tool call handling ─────────────────────────────
-                trend_match = re.search(r"\[FETCH_TREND:\s*([^,\]]+),\s*(\d+)\]", full)
-                if trend_match:
-                    entity_id = trend_match.group(1).strip()
-                    hours = int(trend_match.group(2).strip())
-                    print(f"[trend] Fetching {entity_id} for {hours}h", flush=True)
+                # ── Feature 4: Multi-step tool chaining ───────────────────────
+                # Run up to 3 tool-pass iterations so the LLM can chain tools
+                for _tool_pass in range(3):
+                    trend_match = re.search(r"\[FETCH_TREND:\s*([^,\]]+),\s*(\d+)\]", full)
+                    if not trend_match:
+                        break
+                    entity_id_t = trend_match.group(1).strip()
+                    hours_t = int(trend_match.group(2).strip())
+                    print(f"[trend] pass={_tool_pass+1} fetching {entity_id_t} for {hours_t}h", flush=True)
                     try:
-                        trend_data = await ha_trend(entity_id, hours)
+                        trend_data = await ha_trend(entity_id_t, hours_t)
                         stats = trend_data.get("stats", {})
                         points = trend_data.get("points", [])
                         if stats:
-                            # Build a compact summary for the LLM
                             trend_summary = (
-                                f"Historical data for {entity_id} over the last {hours} hours:\n"
+                                f"Historical data for {entity_id_t} over the last {hours_t} hours:\n"
                                 f"  Min: {stats['min']}  Max: {stats['max']}  "
                                 f"Mean: {stats['mean']}  Change: {stats['delta']:+}  "
                                 f"Samples: {stats['count']}\n"
                             )
                             if points:
-                                # Show first, middle, last values for context
                                 first = points[0]
                                 mid   = points[len(points) // 2]
                                 last  = points[-1]
@@ -597,17 +878,16 @@ async def chat(body: dict):
                                     f"  End:   {last['v']} at {last['t'][:16]}\n"
                                 )
                         else:
-                            trend_summary = f"No historical data found for {entity_id} in the last {hours} hours."
+                            trend_summary = f"No historical data found for {entity_id_t} in the last {hours_t} hours."
                     except Exception as te:
-                        trend_summary = f"Could not fetch trend for {entity_id}: {te}"
+                        trend_summary = f"Could not fetch trend for {entity_id_t}: {te}"
 
-                    # Second LLM pass: inject the real data and ask for natural response
                     trend_messages = messages + [
                         {"role": "assistant", "content": full},
                         {"role": "user", "content": (
                             f"[SYSTEM: Trend data retrieved]\n{trend_summary}\n"
                             f"Now answer the user's original question naturally using this data. "
-                            f"Do not mention the tool call or system message."
+                            f"You may emit another [FETCH_TREND:...] if you need more data, or answer directly."
                         )},
                     ]
                     def _stream2():
@@ -615,12 +895,18 @@ async def chat(body: dict):
                     tokens2 = await loop.run_in_executor(None, _stream2)
                     full = "".join(tokens2) if tokens2 else trend_summary
 
-                # Strip tool call tags, JSON blocks, and markdown before displaying
+                # ── Feature 6: TIMER tool ─────────────────────────────────────
+                timer_cfg = extract_timer(full)
+                if timer_cfg:
+                    job_id = schedule_timer(timer_cfg["entity_id"], timer_cfg["minutes"], timer_cfg["domain"])
+                    yield f"data: {json.dumps({'event': 'timer_set', 'entity_id': timer_cfg['entity_id'], 'minutes': timer_cfg['minutes'], 'job_id': job_id})}\n\n"
+
+                # Strip all tool tags, JSON blocks, and markdown before streaming
                 spoken = strip_command_block(full)
-                spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
                 spoken = strip_markdown_for_tts(spoken)
                 for word in re.findall(r'\S+\s*', spoken):
                     yield f"data: {json.dumps({'token': word})}\n\n"
+
         except Exception as e:
             err_msg = f"[LLM error: {e}]"
             yield f"data: {json.dumps({'token': err_msg})}\n\n"
@@ -642,9 +928,14 @@ async def chat(body: dict):
             yield f"data: {json.dumps({'event': 'ha_result', 'result': ha_result, 'entity_id': cmd.get('entity_id', '')})}\n\n"
 
         spoken = strip_command_block(full)
-        spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
         spoken = strip_markdown_for_tts(spoken)
-        conversation.append({"role": "assistant", "content": spoken})
+
+        # Feature 3: Log recommendation if present
+        _maybe_log_recommendation(spoken, context=user_msg)
+
+        # Feature 2: Persist assistant reply to session
+        _append_session(session_id, "assistant", spoken)
+
         yield f"data: {json.dumps({'done': True, 'full': spoken})}\n\n"
 
     headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
@@ -981,13 +1272,17 @@ async def farm_prime(body: dict):
         + " | ".join(f"{i.get('title','?')}: {i.get('summary','')[:80]}" for i in (critical_items + warning_items)[:4])
     )
 
-    # Inject as a system memory message into the global conversation
-    # Use a special role marker so it doesn't appear as user/assistant
-    conversation.append({"role": "system", "content": farm_status})
-    # Keep conversation from growing unbounded — trim old farm primes (keep last 2)
-    farm_primes = [i for i, m in enumerate(conversation) if m["role"] == "system"]
-    while len(farm_primes) > 2:
-        conversation.pop(farm_primes.pop(0))
+    # Inject farm status into all active sessions so every conversation gets fresh context
+    for sid, msgs in _sessions.items():
+        # Remove stale farm primes (keep at most 2)
+        farm_primes = [i for i, m in enumerate(msgs) if m["role"] == "system" and "FARM STATUS" in m.get("content", "")]
+        while len(farm_primes) > 1:
+            msgs.pop(farm_primes.pop(0))
+        msgs.append({"role": "system", "content": farm_status})
+    # Also keep a global farm_status for sessions that don't exist yet
+    _sessions.setdefault("__farm_context__", []).clear()
+    _sessions["__farm_context__"].append({"role": "system", "content": farm_status})
+    _save_sessions()
 
     # Generate a proactive briefing only if there are criticals or force_brief
     brief = None
@@ -1095,9 +1390,14 @@ Keep responses concise and practical for a working farmer. You may also control 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
 
+# ── Legacy compat — keep the global conversation list for farm_prime fallback ─
+conversation: list[dict] = []
+
+
 @app.delete("/conversation")
 async def clear_conversation():
     conversation.clear()
+    await clear_all_sessions()
     return {"status": "cleared"}
 
 
@@ -1139,8 +1439,163 @@ async def log_memory(body: dict):
 
 @app.delete("/memory")
 async def clear_memory():
-    _save_memory({"events": [], "observations": [], "spray_log": [], "notes": []})
+    _save_memory({"events": [], "observations": [], "spray_log": [], "notes": [], "decisions": []})
     return {"status": "cleared"}
+
+
+@app.get("/memory/search")
+async def memory_search(q: str = ""):
+    """Feature 1: Search memory by keyword relevance."""
+    mem = _load_memory()
+    results = _search_memory(mem, q, top_n=10)
+    return {"query": q, "results": results}
+
+
+@app.get("/memory/decisions")
+async def get_decisions():
+    """Feature 3: Return all logged recommendations/decisions."""
+    mem = _load_memory()
+    return {"decisions": list(reversed(mem.get("decisions", [])))}
+
+
+@app.post("/memory/outcome")
+async def log_outcome(body: dict):
+    """
+    Feature 3: Link an outcome to a pending decision.
+    Body: { index: int (0=latest), outcome: str }
+    """
+    mem = _load_memory()
+    decisions = mem.get("decisions", [])
+    if not decisions:
+        return JSONResponse({"error": "No decisions logged yet."}, status_code=404)
+    idx = body.get("index", len(decisions) - 1)
+    outcome = (body.get("outcome") or "").strip()
+    if not outcome:
+        return JSONResponse({"error": "outcome required"}, status_code=400)
+    try:
+        decisions[idx]["outcome"] = outcome
+        decisions[idx]["outcome_date"] = datetime.datetime.now().isoformat()
+    except IndexError:
+        return JSONResponse({"error": "index out of range"}, status_code=400)
+    mem["decisions"] = decisions
+    _save_memory(mem)
+    return {"status": "outcome logged", "decision": decisions[idx]}
+
+
+# ── Session endpoints (feature 2) ─────────────────────────────────────────────
+@app.get("/sessions")
+async def list_sessions():
+    """List all active sessions and their message counts."""
+    return {
+        "sessions": [
+            {"session_id": sid, "message_count": len(msgs), "last_message": msgs[-1]["content"][:60] if msgs else ""}
+            for sid, msgs in _sessions.items()
+        ]
+    }
+
+
+@app.delete("/sessions/{session_id}")
+async def clear_session(session_id: str):
+    """Clear a specific session's conversation history."""
+    _sessions.pop(session_id, None)
+    _save_sessions()
+    return {"status": "cleared", "session_id": session_id}
+
+
+@app.delete("/sessions")
+async def clear_all_sessions():
+    """Clear all session histories."""
+    _sessions.clear()
+    _save_sessions()
+    return {"status": "all sessions cleared"}
+
+
+# ── Pending timer alerts (feature 6) ──────────────────────────────────────────
+@app.get("/alerts/pending")
+async def get_pending_alerts():
+    """
+    Frontend polls this to pick up timer expiry notifications and other
+    server-pushed alerts (auto-off spoken reminders, etc).
+    Clears the queue on read.
+    """
+    alerts = list(_pending_timer_alerts)
+    _pending_timer_alerts.clear()
+    return {"alerts": alerts}
+
+
+@app.get("/alerts/timers")
+async def list_timers():
+    """Return all currently scheduled timer jobs."""
+    jobs = [
+        {
+            "job_id": job.id,
+            "run_at": job.next_run_time.isoformat() if job.next_run_time else None,
+            "args": list(job.args) if job.args else [],
+        }
+        for job in scheduler.get_jobs()
+        if job.id.startswith("timer_")
+    ]
+    return {"timers": jobs}
+
+
+@app.delete("/alerts/timers/{job_id}")
+async def cancel_timer(job_id: str):
+    """Cancel a pending timer by job_id."""
+    try:
+        scheduler.remove_job(job_id)
+        return {"status": "cancelled", "job_id": job_id}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+
+
+# ── Daily digest endpoints (feature 7) ────────────────────────────────────────
+@app.get("/digest")
+async def get_digest():
+    """Return today's morning digest if generated, or trigger one now."""
+    global _latest_digest
+    today = datetime.date.today().isoformat()
+    if _latest_digest and _latest_digest.get("date") == today:
+        return _latest_digest
+    # Trigger generation on-demand (e.g. first page load of the day)
+    await _daily_digest_job()
+    return _latest_digest or {"date": today, "text": None, "audio_b64": None}
+
+
+@app.post("/digest/trigger")
+async def trigger_digest():
+    """Force-regenerate the daily digest regardless of whether it already ran today."""
+    global _last_digest_date
+    _last_digest_date = ""  # reset gate so _daily_digest_job runs
+    await _daily_digest_job()
+    return _latest_digest or {"error": "digest generation failed"}
+
+
+# ── Persona config endpoints (feature 8) ──────────────────────────────────────
+@app.get("/persona")
+async def get_persona():
+    """Return the current persona configuration."""
+    return {
+        "name":  PERSONA_NAME,
+        "style": PERSONA_STYLE,
+        "notes": PERSONA_NOTES,
+        "preview": _build_system_prompt()[:300] + "...",
+    }
+
+
+@app.post("/persona")
+async def set_persona(body: dict):
+    """
+    Update persona at runtime (no restart needed).
+    Body: { name?: str, style?: str, notes?: str }
+    Changes take effect on the next /chat call.
+    """
+    global PERSONA_NAME, PERSONA_STYLE, PERSONA_NOTES, SYSTEM_PROMPT
+    if "name"  in body: PERSONA_NAME  = body["name"].strip()
+    if "style" in body: PERSONA_STYLE = body["style"].strip()
+    if "notes" in body: PERSONA_NOTES = body["notes"].strip()
+    SYSTEM_PROMPT = _build_system_prompt()
+    print(f"[persona] Updated: name={PERSONA_NAME} style={PERSONA_STYLE}", flush=True)
+    return {"status": "updated", "name": PERSONA_NAME, "style": PERSONA_STYLE, "notes": PERSONA_NOTES}
 
 
 # ── Proactive alert webhook (called by HA automations) ────────────────────────

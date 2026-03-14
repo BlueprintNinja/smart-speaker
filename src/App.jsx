@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import NodeCanvas from "./NodeCanvas";
 import Dashboard from "./Dashboard";
 
@@ -137,20 +137,47 @@ body {
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Stable session ID (feature 2) — persisted across page reloads ──────────────
+function getOrCreateSessionId() {
+  const key = "sky_session_id";
+  let id = sessionStorage.getItem(key);
+  if (!id) {
+    id = "sess_" + Math.random().toString(36).slice(2, 11) + "_" + Date.now();
+    sessionStorage.setItem(key, id);
+  }
+  return id;
+}
+
 export default function App() {
+  const sessionId = useMemo(() => getOrCreateSessionId(), []);
+
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking
+  const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking, wake
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
-  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory
+  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory | decisions
   const [showCanvas, setShowCanvas] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
   const [micError, setMicError] = useState(null);
   const [memory, setMemory] = useState(null);
   const [memNote, setMemNote] = useState("");
   const [lastAlert, setLastAlert] = useState(null);
+  // Feature 5: wake word
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const wakeWordRef = useRef(false);
+  const wakeAnalyserRef = useRef(null);
+  const wakeStreamRef = useRef(null);
+  const wakeRafRef = useRef(null);
+  // Feature 6: active timers display
+  const [activeTimers, setActiveTimers] = useState([]);
+  // Feature 7: daily digest
+  const [digest, setDigest] = useState(null);
+  const digestShownRef = useRef(false);
+  // Feature 3: decisions
+  const [decisions, setDecisions] = useState([]);
+  const [outcomeInput, setOutcomeInput] = useState({});
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -173,27 +200,78 @@ export default function App() {
   };
   useEffect(() => { loadMemory(); }, []);
 
-  // ── Alert polling — check for proactive TTS alerts from HA automations ──────
+  // ── Feature 7: Daily digest — fetch on first load of the day ─────────────────
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const lastDigestDay = localStorage.getItem("sky_digest_day");
+    if (lastDigestDay === today && digestShownRef.current) return;
+    fetch(`${API}/digest`)
+      .then(r => r.json())
+      .then(d => {
+        if (d?.text) {
+          setDigest(d);
+          if (lastDigestDay !== today) {
+            localStorage.setItem("sky_digest_day", today);
+            // Auto-play digest audio if available
+            if (d.audio_b64) {
+              const bytes = Uint8Array.from(atob(d.audio_b64), c => c.charCodeAt(0));
+              const blob = new Blob([bytes], { type: "audio/wav" });
+              const url = URL.createObjectURL(blob);
+              const audio = new Audio(url);
+              audio.play().catch(() => {});
+              audio.onended = () => URL.revokeObjectURL(url);
+            }
+          }
+          digestShownRef.current = true;
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Feature 3: Load decisions ──────────────────────────────────────────────
+  const loadDecisions = () => {
+    fetch(`${API}/memory/decisions`)
+      .then(r => r.json())
+      .then(d => setDecisions(d.decisions || []))
+      .catch(() => {});
+  };
+  useEffect(() => { loadDecisions(); }, []);
+
+  // ── Feature 6 + Alert polling — /alerts/pending covers timers AND HA alerts ──
   const lastAlertRef = useRef(null);
   useEffect(() => {
     const poll = async () => {
       try {
-        const r = await fetch(`${API}/memory`);
-        const mem = await r.json();
-        const alerts = (mem.events || []).filter(e => e.type === "alert");
-        if (alerts.length === 0) return;
-        const latest = alerts[alerts.length - 1];
-        const key = latest.date + latest.sensor;
-        if (lastAlertRef.current === key) return;
-        lastAlertRef.current = key;
-        setLastAlert(latest);
-        setMemory(mem);
-        // Show in chat
-        const alertMsg = `🚨 Alert: ${latest.sensor} → ${latest.state}`;
-        setMessages(prev => [...prev, { role: "bot", text: alertMsg, isAlert: true }]);
-      } catch (e) { /* silent */ }
+        const r = await fetch(`${API}/alerts/pending`);
+        const data = await r.json();
+        const alerts = data.alerts || [];
+        for (const alert of alerts) {
+          // Play audio if present
+          if (alert.audio_b64) {
+            try {
+              const bytes = Uint8Array.from(atob(alert.audio_b64), c => c.charCodeAt(0));
+              const blob = new Blob([bytes], { type: "audio/wav" });
+              const url = URL.createObjectURL(blob);
+              const audio = new Audio(url);
+              audio.play().catch(() => {});
+              audio.onended = () => URL.revokeObjectURL(url);
+            } catch (_) {}
+          }
+          // Show in chat
+          setMessages(prev => [...prev, {
+            role: "bot",
+            text: alert.text,
+            isAlert: true,
+            severity: alert.severity,
+          }]);
+        }
+        // Also refresh active timers display
+        const tr = await fetch(`${API}/alerts/timers`);
+        const td = await tr.json();
+        setActiveTimers(td.timers || []);
+      } catch (_) {}
     };
-    const id = setInterval(poll, 30000);
+    const id = setInterval(poll, 10000);
     return () => clearInterval(id);
   }, []);
 
@@ -298,7 +376,87 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── Speech Recognition / Audio Recording ───────────────────────────────────
+  // ── Feature 5: Wake word detection (energy-based "Hey Sky" trigger) ──────────
+  const WAKE_PHRASE = "hey sky";
+
+  const startWakeWord = useCallback(async () => {
+    if (wakeWordRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      wakeStreamRef.current = stream;
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      wakeAnalyserRef.current = analyser;
+      wakeWordRef.current = true;
+      setWakeWordEnabled(true);
+      setOrbState("wake");
+
+      // We use the Web Speech API for live phrase detection when available,
+      // falling back to energy-level recording + Whisper for "hey sky" detection.
+      if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const rec = new SR();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = "en-US";
+        rec.onresult = (ev) => {
+          const transcript = Array.from(ev.results)
+            .map(r => r[0].transcript.toLowerCase()).join(" ");
+          if (transcript.includes(WAKE_PHRASE) && !isRecording && !loading) {
+            rec.stop();
+            stopWakeWord();
+            startListening();
+          }
+        };
+        rec.onend = () => {
+          if (wakeWordRef.current) rec.start(); // restart if still armed
+        };
+        rec.onerror = () => {};
+        rec.start();
+        wakeWordRef.current = rec; // store for cleanup
+      } else {
+        // Fallback: monitor energy; if sustained loud audio, start recording
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        let silenceCount = 0;
+        const tick = () => {
+          if (!wakeWordRef.current) return;
+          analyser.getByteFrequencyData(buf);
+          const energy = buf.reduce((s, v) => s + v, 0) / buf.length;
+          if (energy > 40) { silenceCount = 0; }
+          else { silenceCount++; }
+          // Sustained energy spike — treat as activation
+          if (energy > 55 && !isRecording && !loading) {
+            stopWakeWord();
+            startListening();
+            return;
+          }
+          wakeRafRef.current = requestAnimationFrame(tick);
+        };
+        wakeRafRef.current = requestAnimationFrame(tick);
+      }
+    } catch (err) {
+      setMicError("Wake word mic error: " + err.message);
+    }
+  }, [isRecording, loading]);
+
+  const stopWakeWord = useCallback(() => {
+    if (typeof wakeWordRef.current === "object" && wakeWordRef.current?.stop) {
+      try { wakeWordRef.current.stop(); } catch (_) {}
+    }
+    wakeWordRef.current = false;
+    if (wakeRafRef.current) cancelAnimationFrame(wakeRafRef.current);
+    if (wakeStreamRef.current) {
+      wakeStreamRef.current.getTracks().forEach(t => t.stop());
+      wakeStreamRef.current = null;
+    }
+    setWakeWordEnabled(false);
+    setOrbState("idle");
+  }, []);
+
+  // ── Speech Recognition / Audio Recording ─────────────────────────────────────
   const startListening = async () => {
     setMicError(null);
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -359,32 +517,10 @@ export default function App() {
   };
 
   // ── Chat & TTS ──────────────────────────────────────────────────────────────
-  const ttsQueueRef = useRef([]);
-  const ttsPlayingRef = useRef(false);
-
-  const enqueueTTS = (text) => {
-    const clean = text.trim();
-    if (!clean) return;
-    ttsQueueRef.current.push(clean);
-    if (!ttsPlayingRef.current) drainTTSQueue();
-  };
-
-  const drainTTSQueue = async () => {
-    if (ttsPlayingRef.current) return;
-    while (ttsQueueRef.current.length > 0) {
-      const sentence = ttsQueueRef.current.shift();
-      ttsPlayingRef.current = true;
-      await playTTS(sentence);
-      ttsPlayingRef.current = false;
-    }
-  };
-
   const sendText = async (text) => {
     if (!text.trim()) return;
     setLoading(true);
     setOrbState("thinking");
-    ttsQueueRef.current = [];
-    ttsPlayingRef.current = false;
 
     const newMsg = { role: "user", text };
     setMessages(prev => [...prev, newMsg]);
@@ -394,15 +530,14 @@ export default function App() {
       const response = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, session_id: sessionId }),
       });
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let botText = "";
       let buf = "";
-      let sentenceBuf = "";  // accumulates tokens until a sentence boundary
-      let ttsStarted = false;
+      let finalText = "";
 
       // Add initial empty bot message
       setMessages(prev => [...prev, { role: "bot", text: "", sources: [] }]);
@@ -421,27 +556,30 @@ export default function App() {
             const data = JSON.parse(line.slice(6));
             if (data.token) {
               botText += data.token;
-              sentenceBuf += data.token;
               updateLastBotMessage(botText, null, null);
-              // Fire TTS on sentence boundaries (.  !  ?  followed by space or end)
-              const boundaryMatch = sentenceBuf.match(/^(.+?[.!?])\s/);
-              if (boundaryMatch) {
-                const sentence = boundaryMatch[1];
-                sentenceBuf = sentenceBuf.slice(boundaryMatch[0].length);
-                ttsStarted = true;
-                enqueueTTS(sentence);
-              }
             } else if (data.event === "ha_result") {
               updateLastBotMessage(null, null, data.result);
               setLastHaEvent({ ...data.result, entity_id: data.entity_id });
+            } else if (data.event === "timer_set") {
+              const mins = data.minutes;
+              const label = data.entity_id?.split(".")[1]?.replace(/_/g, " ") || data.entity_id;
+              setMessages(prev => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === "bot") {
+                  next[next.length - 1] = { ...last, timerInfo: { entity_id: data.entity_id, minutes: mins, label, job_id: data.job_id } };
+                }
+                return next;
+              });
+              fetch(`${API}/alerts/timers`).then(r => r.json()).then(d => setActiveTimers(d.timers || [])).catch(() => {});
             } else if (data.done) {
-              // Flush any remaining sentence buffer
-              if (sentenceBuf.trim()) enqueueTTS(sentenceBuf.trim());
-              else if (!ttsStarted) enqueueTTS(data.full);
+              finalText = data.full || botText;
             }
           } catch (e) { /* malformed line */ }
         }
       }
+      // Speak the full response once streaming is complete
+      if (finalText.trim()) playTTS(finalText);
     } catch (err) {
       console.error("Chat failed", err);
     } finally {
@@ -505,9 +643,10 @@ export default function App() {
             </div>
           </div>
           <div className="tab-nav">
-            <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬 Chat</button>
-            <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞ Dash</button>
-            <button className={`tab-btn${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>🧠 Memory</button>
+            <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬</button>
+            <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞</button>
+            <button className={`tab-btn${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>🧠</button>
+            <button className={`tab-btn${activeTab === 'decisions' ? ' active' : ''}`} onClick={() => { setActiveTab('decisions'); loadDecisions(); }}>📋</button>
           </div>
           <div style={{ padding: '1.5rem' }}>
             <div className="sidebar-stat">
@@ -523,10 +662,54 @@ export default function App() {
               <span className={`dot ${haStatus === true ? 'dot-green' : haStatus === false ? 'dot-red' : 'dot-dim'}`}
                     title={haStatus === true ? 'Connected' : haStatus === false ? 'Not connected' : 'Checking...'} />
             </div>
-            <div className="sidebar-stat" style={{ border: 'none', marginTop: '0.5rem' }}>
+            <div className="sidebar-stat" style={{ borderBottom: '1px solid var(--navy-800)', paddingBottom: '0.5rem' }}>
               <span>VOICE ENGINE</span>
               <span style={{ color: 'var(--amber-400)', fontSize: '0.65rem' }}>KOKORO</span>
             </div>
+            {/* Feature 5: Wake word toggle */}
+            <div style={{ marginTop: '0.75rem' }}>
+              <button onClick={() => wakeWordEnabled ? stopWakeWord() : startWakeWord()}
+                style={{ width: '100%', padding: '0.4rem', borderRadius: '6px', border: `1px solid ${wakeWordEnabled ? 'var(--amber-500)' : 'var(--navy-600)'}`,
+                  background: wakeWordEnabled ? 'rgba(245,158,11,0.12)' : 'transparent',
+                  color: wakeWordEnabled ? 'var(--amber-400)' : 'var(--text-dim)',
+                  fontSize: '0.68rem', cursor: 'pointer', fontFamily: 'JetBrains Mono', letterSpacing: '0.5px' }}>
+                {wakeWordEnabled ? '🎙 LISTENING — HEY SKY' : '🎙 ENABLE WAKE WORD'}
+              </button>
+            </div>
+            {/* Feature 6: Active timers */}
+            {activeTimers.length > 0 && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.35rem' }}>Active Timers</div>
+                {activeTimers.map(t => (
+                  <div key={t.job_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    background: 'var(--navy-800)', borderRadius: '5px', padding: '0.3rem 0.5rem',
+                    fontSize: '0.65rem', marginBottom: '0.25rem', border: '1px solid var(--navy-600)' }}>
+                    <span style={{ color: 'var(--text-bright)' }}>{(t.args?.[0] || '').split('.')[1]?.replace(/_/g,' ') || t.args?.[0]}</span>
+                    <span style={{ color: 'var(--amber-400)' }}>{t.run_at ? new Date(t.run_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '...'}</span>
+                    <button onClick={async () => {
+                      await fetch(`${API}/alerts/timers/${t.job_id}`, { method: 'DELETE' });
+                      setActiveTimers(prev => prev.filter(x => x.job_id !== t.job_id));
+                    }} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0 2px', fontSize: '0.65rem' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Feature 7: Digest banner */}
+            {digest && (
+              <div style={{ marginTop: '0.75rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)',
+                borderRadius: '6px', padding: '0.5rem 0.6rem' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--amber-400)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>Morning Briefing · {digest.date}</div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-bright)', lineHeight: '1.5' }}>{digest.text}</div>
+                <button onClick={() => { if (digest.audio_b64) {
+                  const bytes = Uint8Array.from(atob(digest.audio_b64), c => c.charCodeAt(0));
+                  const blob = new Blob([bytes], { type: 'audio/wav' });
+                  const url = URL.createObjectURL(blob);
+                  const a = new Audio(url); a.play().catch(()=>{}); a.onended = () => URL.revokeObjectURL(url);
+                } else { playTTS(digest.text); }}}
+                  style={{ marginTop: '0.4rem', background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)',
+                    fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer' }}>▶ REPLAY</button>
+              </div>
+            )}
           </div>
         </aside>
 
@@ -535,6 +718,45 @@ export default function App() {
 
           {activeTab === 'dashboard' ? (
             <Dashboard api={API} />
+          ) : activeTab === 'decisions' ? (
+            /* Feature 3: Decision journal */
+            <div style={{ flex: 1, overflow: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px' }}>DECISION JOURNAL</div>
+                <button onClick={() => fetch(`${API}/digest/trigger`, { method: 'POST' }).then(r => r.json()).then(d => { if (d?.text) setDigest(d); })}
+                  style={{ background: 'var(--navy-700)', border: '1px solid var(--navy-600)', color: 'var(--text-dim)', fontSize: '0.65rem', padding: '0.3rem 0.6rem', borderRadius: '5px', cursor: 'pointer' }}>↻ NEW DIGEST</button>
+              </div>
+              {decisions.length === 0 ? (
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', fontStyle: 'italic' }}>No recommendations logged yet. Sky will log farm advice automatically as you chat.</div>
+              ) : decisions.map((d, i) => (
+                <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '8px', padding: '0.75rem', borderLeft: `3px solid ${d.outcome ? '#4ade80' : 'var(--amber-500)'}` }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.3rem' }}>{d.date?.slice(0,16)} {d.context ? `· ${d.context.slice(0,50)}` : ''}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-bright)', marginBottom: '0.4rem' }}>{d.recommendation}</div>
+                  {d.outcome ? (
+                    <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>✓ Outcome: {d.outcome}</div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem' }}>
+                      <input value={outcomeInput[i] || ''}
+                        onChange={e => setOutcomeInput(prev => ({ ...prev, [i]: e.target.value }))}
+                        placeholder="Log what happened..."
+                        style={{ flex: 1, background: 'var(--navy-700)', border: '1px solid var(--navy-600)', color: 'white',
+                          padding: '0.3rem 0.5rem', borderRadius: '5px', fontSize: '0.7rem' }} />
+                      <button onClick={async () => {
+                        const outcome = outcomeInput[i];
+                        if (!outcome?.trim()) return;
+                        const realIdx = decisions.length - 1 - i;
+                        await fetch(`${API}/memory/outcome`, { method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ index: realIdx, outcome }) });
+                        setOutcomeInput(prev => ({ ...prev, [i]: '' }));
+                        loadDecisions();
+                      }} style={{ background: 'var(--navy-600)', border: 'none', color: 'var(--amber-400)',
+                        padding: '0.3rem 0.6rem', borderRadius: '5px', cursor: 'pointer', fontSize: '0.7rem' }}>LOG</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           ) : activeTab === 'memory' ? (
             <div style={{ flex: 1, overflow: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px' }}>SKY MEMORY</div>
@@ -632,6 +854,16 @@ export default function App() {
                           {msg.role === 'bot' && msg.haResult && (
                             <div className={`ha-action ${msg.haResult.ok ? 'ok' : 'err'}`}>
                               {msg.haResult.ok ? '✓ Device command sent' : `✗ ${msg.haResult.error}`}
+                            </div>
+                          )}
+                          {msg.role === 'bot' && msg.timerInfo && (
+                            <div className="ha-action ok" style={{ borderColor: '#92400e', background: 'rgba(146,64,14,0.15)', color: '#fbbf24' }}>
+                              ⏱ Auto-off in {msg.timerInfo.minutes}min — {msg.timerInfo.label}
+                            </div>
+                          )}
+                          {msg.role === 'bot' && msg.isAlert && (
+                            <div className={`ha-action ${msg.severity === 'critical' ? 'err' : 'ok'}`}>
+                              {msg.severity === 'critical' ? '🚨' : '⚠'} {msg.severity || 'alert'}
                             </div>
                           )}
                           {msg.role === 'bot' && i < messages.length - 1 && (
