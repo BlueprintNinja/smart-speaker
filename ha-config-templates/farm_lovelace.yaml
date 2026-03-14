@@ -66,3 +66,57 @@ views:
             name: Soil Moisture (0-7cm)
           - entity: sensor.farm_soil_temp
             name: Soil Temp (18cm)
+
+      - type: entity-filter
+        card:
+          type: entities
+          title: Canvas Devices
+          icon: mdi:hexagon-multiple
+        show_empty: false
+        entities:
+          - entity: sensor.canvas_irrigation_zone_1
+          - entity: sensor.canvas_irrigation_zone_2
+          - entity: sensor.canvas_irrigation_zone_3
+          - entity: sensor.canvas_light_barn
+          - entity: sensor.canvas_light_field
+          - entity: sensor.canvas_tensiometer_field1
+          - entity: sensor.canvas_tensiometer_field2
+          - entity: sensor.canvas_rainpoint
+          - entity: sensor.canvas_camera_barn
+        state_filter:
+          - operator: "!="
+            value: "unavailable"
+
+  - title: Sky Assistant
+    icon: mdi:robot
+    path: sky
+    cards:
+      - type: markdown
+        title: About Sky
+        content: >
+          **Sky** is the farm's AI voice assistant.
+          She monitors all farm sensors, responds to voice commands,
+          and speaks proactive alerts when thresholds are crossed.
+
+          - **Chat:** http://localhost (Smart Speaker UI)
+          - **Memory:** Spray logs, observations, and alerts are persisted
+          - **Alerts:** HA automations POST to `/alert` when sensor thresholds trigger
+
+      - type: entities
+        title: Farm Bridge Sensors
+        icon: mdi:antenna
+        entities:
+          - entity: sensor.farm_gdd
+          - entity: sensor.farm_growth_stage
+          - entity: sensor.farm_fungal_risk
+          - entity: sensor.farm_swd_risk
+          - entity: sensor.farm_spray_window
+          - entity: sensor.farm_frost_risk
+          - entity: sensor.farm_vpd
+          - entity: sensor.farm_yield_threat
+          - entity: sensor.farm_nws_alerts
+          - entity: sensor.farm_days_to_harvest
+          - entity: sensor.farm_soil_moisture
+          - entity: sensor.farm_soil_temp
+          - entity: sensor.farm_chill_hours
+          - entity: sensor.farm_chill_pct
