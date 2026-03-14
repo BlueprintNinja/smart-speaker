@@ -492,7 +492,7 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
     if not HA_TOKEN:
         return {"error": "HA_TOKEN not configured"}
 
-    # Canvas virtual entities — if created via states API fallback, handle directly
+    # Canvas virtual entities — rewrite to the real input_boolean helper
     if entity_id and _is_canvas_entity(entity_id):
         helpers = _load_canvas_helpers()
         slug = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
@@ -512,7 +512,12 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
                 return {"error": f"States API returned {r2.status_code}"}
             except Exception as e:
                 return {"error": str(e)}
-        # Config API entities are real helpers — HA handles services natively, fall through
+        else:
+            # Config API entity — rewrite to input_boolean.{slug} so HA recognises it
+            real_eid = f"input_boolean.{slug}"
+            print(f"[canvas] Rewriting {entity_id} → {real_eid} (config API helper)", flush=True)
+            entity_id = real_eid
+            domain = "input_boolean"
 
     # Pre-check: entity must exist in HA cache (skip check for homeassistant domain)
     if entity_id and domain != "homeassistant":
