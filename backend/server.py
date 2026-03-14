@@ -112,7 +112,23 @@ If you do NOT know the exact entity_id, make your best guess based on the name t
 For read-only questions ("what is the soil moisture?", "is the gate open?", "what's the temperature?")
 do NOT include a JSON block — just answer naturally based on context.
 
-If the user is chatting or asking a general question, do NOT include any JSON block."""
+If the user is chatting or asking a general question, do NOT include any JSON block.
+
+== HISTORICAL TREND TOOL ==
+When the user asks about trends, history, patterns, or changes over time for any sensor, use this tool:
+
+[FETCH_TREND: <entity_id>, <hours>]
+
+Examples:
+- "what has the soil moisture been doing this week?" → [FETCH_TREND: sensor.farm_soil_moisture, 168]
+- "show me fungal risk over the last 24 hours" → [FETCH_TREND: sensor.farm_fungal_risk, 24]
+- "has the temperature been rising?" → [FETCH_TREND: sensor.farm_soil_temp, 72]
+
+RULES for FETCH_TREND:
+- Use ONLY the tool tag on its own line — do not add any other text before or after it.
+- The system will fetch real historical data and call you again with the results.
+- Default to 72 hours if the user doesn't specify a timeframe.
+- Common timeframes: "today"=24h, "this week"=168h, "yesterday"=48h, "last few days"=72h"""
 
 
 # ── GPU concurrency lock ──────────────────────────────────────────────────────
@@ -503,9 +519,57 @@ async def chat(body: dict):
                 full = ""
             else:
                 full = "".join(tokens)
-                # Strip the JSON command block before displaying to user
+
+                # ── FETCH_TREND tool call handling ─────────────────────────────
+                trend_match = re.search(r"\[FETCH_TREND:\s*([^,\]]+),\s*(\d+)\]", full)
+                if trend_match:
+                    entity_id = trend_match.group(1).strip()
+                    hours = int(trend_match.group(2).strip())
+                    print(f"[trend] Fetching {entity_id} for {hours}h", flush=True)
+                    try:
+                        trend_data = await ha_trend(entity_id, hours)
+                        stats = trend_data.get("stats", {})
+                        points = trend_data.get("points", [])
+                        if stats:
+                            # Build a compact summary for the LLM
+                            trend_summary = (
+                                f"Historical data for {entity_id} over the last {hours} hours:\n"
+                                f"  Min: {stats['min']}  Max: {stats['max']}  "
+                                f"Mean: {stats['mean']}  Change: {stats['delta']:+}  "
+                                f"Samples: {stats['count']}\n"
+                            )
+                            if points:
+                                # Show first, middle, last values for context
+                                first = points[0]
+                                mid   = points[len(points) // 2]
+                                last  = points[-1]
+                                trend_summary += (
+                                    f"  Start: {first['v']} at {first['t'][:16]}\n"
+                                    f"  Mid:   {mid['v']} at {mid['t'][:16]}\n"
+                                    f"  End:   {last['v']} at {last['t'][:16]}\n"
+                                )
+                        else:
+                            trend_summary = f"No historical data found for {entity_id} in the last {hours} hours."
+                    except Exception as te:
+                        trend_summary = f"Could not fetch trend for {entity_id}: {te}"
+
+                    # Second LLM pass: inject the real data and ask for natural response
+                    trend_messages = messages + [
+                        {"role": "assistant", "content": full},
+                        {"role": "user", "content": (
+                            f"[SYSTEM: Trend data retrieved]\n{trend_summary}\n"
+                            f"Now answer the user's original question naturally using this data. "
+                            f"Do not mention the tool call or system message."
+                        )},
+                    ]
+                    def _stream2():
+                        return list(_ollama_chat_stream(trend_messages, {"temperature": 0.4}))
+                    tokens2 = await loop.run_in_executor(None, _stream2)
+                    full = "".join(tokens2) if tokens2 else trend_summary
+
+                # Strip tool call tags and JSON blocks before displaying
                 spoken = strip_command_block(full)
-                # Stream the cleaned text token by token (split on words to keep streaming feel)
+                spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
                 for word in re.findall(r'\S+\s*', spoken):
                     yield f"data: {json.dumps({'token': word})}\n\n"
         except Exception as e:
