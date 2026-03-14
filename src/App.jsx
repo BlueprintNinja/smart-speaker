@@ -226,8 +226,22 @@ function getOrCreateSessionId() {
   return id;
 }
 
+// ── Mobile detection hook ─────────────────────────────────────────────────────
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && (window.innerWidth <= breakpoint || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent))
+  );
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= breakpoint || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 export default function App() {
   const sessionId = useMemo(() => getOrCreateSessionId(), []);
+  const isMobile = useIsMobile();
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -693,6 +707,271 @@ export default function App() {
     }
   };
 
+  // ── Mobile Layout ──────────────────────────────────────────────────────────
+  if (isMobile) {
+    return (
+      <>
+        <style>{styles}</style>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+        <div className="mobile-container">
+          {/* ── Header ── */}
+          <div className="mobile-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--amber-400)', letterSpacing: '2px' }}>SKY</span>
+              <div className="mobile-status-dots">
+                <span className={`dot ${haStatus === true ? 'dot-green' : haStatus === false ? 'dot-red' : 'dot-dim'}`} title="HA" />
+                <span className="dot dot-green" title="LLM" />
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {activeTimers.length > 0 && (
+                <span style={{ fontSize: '0.6rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono' }}>
+                  ⏱ {activeTimers.length}
+                </span>
+              )}
+              <div className={`status-badge ${orbState !== 'idle' ? 'active' : ''}`} style={{ fontSize: '0.6rem' }}>{orbState}</div>
+            </div>
+          </div>
+
+          {/* ── Body (tab content) ── */}
+          <div className="mobile-body">
+            {activeTab === 'chat' ? (
+              <>
+                {/* Chat messages */}
+                <div className="mobile-chat">
+                  {messages.length === 0 ? (
+                    <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.4 }}>
+                      <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🌾</div>
+                      <p style={{ fontSize: '0.85rem' }}>Tap the orb or type to talk to Sky</p>
+                    </div>
+                  ) : (
+                    messages.map((msg, i) => (
+                      <div key={i} className={`mobile-msg ${msg.role}`}>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--navy-400)', marginBottom: '2px', fontFamily: 'JetBrains Mono' }}>
+                          {msg.role === 'user' ? 'YOU' : 'SKY'}
+                        </div>
+                        <div>{msg.text || "..."}</div>
+                        {msg.role === 'bot' && msg.haResult && (
+                          <div className={`ha-action ${msg.haResult.ok ? 'ok' : 'err'}`} style={{ marginTop: '0.4rem' }}>
+                            {msg.haResult.ok ? '✓ Command sent' : `✗ ${msg.haResult.error}`}
+                          </div>
+                        )}
+                        {msg.role === 'bot' && msg.timerInfo && (
+                          <div className="ha-action ok" style={{ borderColor: '#92400e', background: 'rgba(146,64,14,0.15)', color: '#fbbf24', marginTop: '0.4rem' }}>
+                            ⏱ Auto-off {msg.timerInfo.minutes}min — {msg.timerInfo.label}
+                          </div>
+                        )}
+                        {msg.role === 'bot' && msg.isAlert && (
+                          <div className={`ha-action ${msg.severity === 'critical' ? 'err' : 'ok'}`} style={{ marginTop: '0.4rem' }}>
+                            {msg.severity === 'critical' ? '🚨' : '⚠'} {msg.severity || 'alert'}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                  <div ref={bottomRef} />
+                </div>
+
+                {/* Input zone */}
+                <div className="mobile-input-zone">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <button
+                      className={`mobile-orb ${orbState}`}
+                      onTouchStart={(e) => { e.preventDefault(); startListening(); }}
+                      onTouchEnd={(e) => { e.preventDefault(); stopListening(); }}
+                      onMouseDown={startListening}
+                      onMouseUp={stopListening}
+                    >
+                      <div style={{ width: '28%', height: '28%', border: '2px solid white', borderRadius: '50%' }} />
+                    </button>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                      <span style={{ fontSize: '0.6rem', color: 'var(--navy-400)', fontFamily: 'JetBrains Mono', fontWeight: 'bold' }}>
+                        {orbState === 'listening' ? 'LISTENING...' : orbState === 'thinking' ? 'THINKING...' : 'HOLD ORB TO SPEAK'}
+                      </span>
+                      <div className="mobile-text-row">
+                        <textarea
+                          className="mobile-text-input"
+                          rows={1}
+                          placeholder="Type a command..."
+                          value={input}
+                          onChange={e => setInput(e.target.value)}
+                          onKeyDown={handleKey}
+                          disabled={loading}
+                        />
+                        <button className="mobile-send" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
+                          ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  {micError && (
+                    <div style={{ fontSize: '0.6rem', color: '#f87171', marginTop: '0.3rem', textAlign: 'center' }}>⚠ {micError}</div>
+                  )}
+                </div>
+              </>
+            ) : activeTab === 'dashboard' ? (
+              <div className="mobile-section-scroll">
+                <Dashboard api={API} />
+              </div>
+            ) : activeTab === 'memory' ? (
+              <div className="mobile-section-scroll">
+                <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px', marginBottom: '0.5rem' }}>SKY MEMORY</div>
+                {/* Quick log */}
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  <input value={memNote} onChange={e => setMemNote(e.target.value)}
+                    placeholder="Log a note..."
+                    onKeyDown={e => { if (e.key === 'Enter' && memNote.trim()) { e.target.blur(); document.querySelector('[data-mem-log-m]')?.click(); } }}
+                    style={{ flex: 1, background: 'var(--navy-800)', border: '1px solid var(--navy-600)', color: 'white', padding: '0.5rem', borderRadius: '8px', fontSize: '0.85rem' }} />
+                  <button data-mem-log-m onClick={async () => {
+                    if (!memNote.trim()) return;
+                    await fetch(`${API}/memory/log`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ type: 'note', data: memNote }) });
+                    setMemNote('');
+                    loadMemory();
+                  }} style={{ background: 'var(--amber-500)', border: 'none', color: '#0b1526', padding: '0.5rem 0.8rem', borderRadius: '8px', fontWeight: 600, fontSize: '0.8rem' }}>LOG</button>
+                </div>
+
+                {memory && (
+                  <>
+                    {memory.spray_log?.length > 0 && (
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>Spray Log</div>
+                        {[...memory.spray_log].reverse().map((s, i) => (
+                          <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '8px', padding: '0.5rem 0.6rem', fontSize: '0.78rem', borderLeft: '3px solid #60a5fa', marginBottom: '0.3rem' }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{s.date?.slice(0,10)}</span> — {s.product || 'Unknown'} {s.rate ? `@ ${s.rate}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {memory.observations?.length > 0 && (
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>Observations</div>
+                        {[...memory.observations].reverse().map((o, i) => (
+                          <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '8px', padding: '0.5rem 0.6rem', fontSize: '0.78rem', borderLeft: '3px solid #4ade80', marginBottom: '0.3rem' }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{o.date?.slice(0,10)}</span> — {o.note}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {memory.notes?.length > 0 && (
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>Notes</div>
+                        {[...memory.notes].reverse().map((n, i) => (
+                          <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '8px', padding: '0.5rem 0.6rem', fontSize: '0.78rem', borderLeft: '3px solid var(--amber-500)', marginBottom: '0.3rem' }}>
+                            {n}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {memory.events?.length > 0 && (
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>Events</div>
+                        {[...memory.events].reverse().slice(0, 15).map((e, i) => (
+                          <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '8px', padding: '0.5rem 0.6rem', fontSize: '0.75rem', borderLeft: `3px solid ${e.severity === 'critical' ? '#f87171' : e.severity === 'warning' ? '#fbbf24' : '#60a5fa'}`, marginBottom: '0.3rem' }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{e.date?.slice(0,16)}</span> — {e.type}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {(!memory.spray_log?.length && !memory.observations?.length && !memory.notes?.length && !memory.events?.length) && (
+                      <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', fontStyle: 'italic' }}>No memory yet. Log a note above or chat with Sky.</div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : activeTab === 'devices' ? (
+              <div className="mobile-section-scroll">
+                <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px', marginBottom: '0.5rem' }}>FARM DEVICES</div>
+                {/* Active timers */}
+                {activeTimers.length > 0 && (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>Active Timers</div>
+                    {activeTimers.map(t => {
+                      const tid = t.timer_id || t.job_id;
+                      const label = t.entity_id
+                        ? t.entity_id.split('.')[1]?.replace(/_/g, ' ')
+                        : (t.args?.[0] || '').split('.')[1]?.replace(/_/g, ' ') || tid;
+                      const timeInfo = t.remaining || (t.run_at ? new Date(t.run_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '...');
+                      return (
+                        <div key={tid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          background: 'var(--navy-800)', borderRadius: '8px', padding: '0.5rem 0.6rem',
+                          fontSize: '0.75rem', marginBottom: '0.3rem', border: '1px solid var(--navy-600)' }}>
+                          <span style={{ color: 'var(--text-bright)' }}>{label}</span>
+                          <span style={{ color: 'var(--amber-400)' }}>{timeInfo}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* Wake word + Deep think toggles */}
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  <button onClick={() => wakeWordEnabled ? stopWakeWord() : startWakeWord()}
+                    style={{ flex: 1, padding: '0.6rem', borderRadius: '8px',
+                      border: `1px solid ${wakeWordEnabled ? 'var(--amber-500)' : 'var(--navy-600)'}`,
+                      background: wakeWordEnabled ? 'rgba(245,158,11,0.12)' : 'var(--navy-800)',
+                      color: wakeWordEnabled ? 'var(--amber-400)' : 'var(--text-dim)',
+                      fontSize: '0.7rem', fontFamily: 'JetBrains Mono' }}>
+                    {wakeWordEnabled ? '🎙 HEY SKY ON' : '🎙 WAKE WORD'}
+                  </button>
+                  <button onClick={() => setDeepThink(p => !p)}
+                    style={{ flex: 1, padding: '0.6rem', borderRadius: '8px',
+                      border: `1px solid ${deepThink ? '#a855f7' : 'var(--navy-600)'}`,
+                      background: deepThink ? 'rgba(168,85,247,0.15)' : 'var(--navy-800)',
+                      color: deepThink ? '#a855f7' : 'var(--text-dim)',
+                      fontSize: '0.7rem', fontFamily: 'JetBrains Mono' }}>
+                    {deepThink ? '🧠 DEEP THINK' : '⚡ FAST MODE'}
+                  </button>
+                </div>
+                {/* Digest */}
+                {digest && (
+                  <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)',
+                    borderRadius: '8px', padding: '0.6rem', marginBottom: '0.75rem' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--amber-400)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>Morning Briefing</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-bright)', lineHeight: '1.5' }}>{digest.text}</div>
+                    <button onClick={() => { if (digest.audio_b64) playAudioB64(digest.audio_b64); else playTTS(digest.text); }}
+                      style={{ marginTop: '0.4rem', background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)',
+                        fontSize: '0.65rem', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer' }}>▶ REPLAY</button>
+                  </div>
+                )}
+                {/* System status */}
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>System Status</div>
+                {[
+                  { name: 'Home Assistant', ok: haStatus === true },
+                  { name: 'LLM (Ollama)', ok: true },
+                  { name: 'Whisper STT', ok: true },
+                  { name: 'Kokoro TTS', ok: true },
+                ].map(s => (
+                  <div key={s.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '0.4rem 0', borderBottom: '1px solid var(--navy-800)', fontSize: '0.75rem' }}>
+                    <span style={{ color: 'var(--text-dim)' }}>{s.name}</span>
+                    <span className={`dot ${s.ok ? 'dot-green' : 'dot-red'}`} />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          {/* ── Bottom Tab Bar ── */}
+          <div className="mobile-tab-bar">
+            <button className={`mobile-tab${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>
+              <span className="mtab-icon">💬</span>Chat
+            </button>
+            <button className={`mobile-tab${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>
+              <span className="mtab-icon">📊</span>Farm
+            </button>
+            <button className={`mobile-tab${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>
+              <span className="mtab-icon">🧠</span>Memory
+            </button>
+            <button className={`mobile-tab${activeTab === 'devices' ? ' active' : ''}`} onClick={() => setActiveTab('devices')}>
+              <span className="mtab-icon">⚙</span>Devices
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── Desktop Layout ──────────────────────────────────────────────────────────
   return (
     <>
       <style>{styles}</style>
