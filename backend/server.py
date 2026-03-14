@@ -77,27 +77,39 @@ CRITICAL RULES:
 - Address Ray by name when appropriate.
 - When you make a farm recommendation (spray, irrigate, apply frost protection), state it clearly.
 
-== LIGHTS ==
-  light.turn_on, light.turn_off, light.toggle
-  extra: {"brightness_pct": 80}  |  {"rgb_color": [255, 100, 0]}  |  {"color_temp": 300}
+== CANVAS DEVICE RULE (CRITICAL) ==
+  ALL canvas-managed devices (irrigation, lights, switches) use input_boolean entities in HA.
+  When the CANVAS DEVICES section lists "control via: input_boolean.xyz", ALWAYS use:
+    action: "input_boolean.turn_on" or "input_boolean.turn_off"
+    entity_id: the exact "input_boolean.xyz" shown
+  Do NOT use light.turn_on, switch.turn_on, etc. for canvas devices — they are input_booleans.
 
-== SWITCHES & PLUGS ==
-  switch.turn_on, switch.turn_off, switch.toggle
+  EXAMPLES:
+  "turn on my light" (canvas device: input_boolean.ay_light) →
+  ```json
+  {"action": "input_boolean.turn_on", "entity_id": "input_boolean.ay_light"}
+  ```
+  I've turned on your light, Ray.
 
-== IRRIGATION & FARM ==
-  input_boolean.turn_on / input_boolean.turn_off  — for canvas-managed irrigation zones
-  switch.turn_on / switch.turn_off  — only if a real physical switch exists in HA
-  automation.trigger  — to trigger scheduled irrigation automations
-  Soil moisture sensors are read-only (sensor domain) — report their state, do not command them.
-  IMPORTANT: Canvas node entity IDs like switch.irrigation_zone_1 are registered as input_boolean.irrigation_zone_1 in HA.
-  Always use input_boolean.* for canvas irrigation nodes.
-
-  IRRIGATION EXAMPLE: "irrigate zone 1 for 30 minutes" →
+  "irrigate zone 1 for 30 minutes" (canvas device: input_boolean.irrigation_zone_1) →
   ```json
   {"action": "input_boolean.turn_on", "entity_id": "input_boolean.irrigation_zone_1"}
   ```
   [TIMER: input_boolean.irrigation_zone_1, 30, input_boolean]
   Turning on irrigation zone 1 for 30 minutes, Ray — I'll turn it off automatically.
+
+== LIGHTS (non-canvas only) ==
+  light.turn_on, light.turn_off, light.toggle
+  extra: {"brightness_pct": 80}  |  {"rgb_color": [255, 100, 0]}  |  {"color_temp": 300}
+
+== SWITCHES & PLUGS (non-canvas only) ==
+  switch.turn_on, switch.turn_off, switch.toggle
+
+== IRRIGATION & FARM ==
+  For canvas irrigation: see CANVAS DEVICE RULE above.
+  switch.turn_on / switch.turn_off  — only if a real physical switch exists in HA
+  automation.trigger  — to trigger scheduled irrigation automations
+  Soil moisture sensors are read-only (sensor domain) — report their state, do not command them.
 
 == COVERS / GATES / BLINDS ==
   cover.open_cover, cover.close_cover, cover.stop_cover, cover.toggle
@@ -2147,7 +2159,69 @@ async def canvas_sync(body: dict):
     # Save updated helper mapping and refresh entity cache
     _save_canvas_helpers(helpers)
     asyncio.ensure_future(_refresh_ha_cache())
+
+    # ── 4. Dynamically update Lovelace dashboard ─────────────────────────
+    try:
+        await _update_lovelace_canvas_entities(nodes, current_slugs)
+    except Exception as e:
+        print(f"[canvas_sync] Lovelace update failed (non-fatal): {e}", flush=True)
+
     return {"pushed": pushed, "created": created, "deleted": deleted, "total": len(nodes), "errors": errors}
+
+
+async def _update_lovelace_canvas_entities(nodes: list, actionable_slugs: dict):
+    """Dynamically update Lovelace dashboard cards to reflect current canvas nodes."""
+    if not HA_TOKEN:
+        return
+
+    # Build entity lists from current nodes
+    sensor_entities = []
+    control_entities = []
+    timer_entities = [{"entity": "timer.sky_init"}]
+    for node in nodes:
+        cfg = node.get("config", {})
+        raw_id = cfg.get("entity_id") or f"canvas_{node.get('id', 'x')}"
+        slug = raw_id.split(".", 1)[-1] if "." in raw_id else raw_id
+        sensor_entities.append({"entity": f"sensor.canvas_{slug}"})
+    for slug in actionable_slugs:
+        control_entities.append({"entity": f"input_boolean.{slug}"})
+        timer_entities.append({"entity": f"timer.sky_{slug}"})
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        # Read current Lovelace config
+        r = await client.get(f"{HA_URL}/api/lovelace/config", headers=_ha_headers())
+        if r.status_code != 200:
+            print(f"[lovelace] Could not read config: {r.status_code}", flush=True)
+            return
+        config = r.json()
+
+        # Find the Farm view and update canvas-related cards
+        updated = False
+        for view in config.get("views", []):
+            for card in view.get("cards", []):
+                inner = card.get("card", {})
+                title = inner.get("title", "")
+
+                if title == "Canvas Devices (Status)" and sensor_entities:
+                    card["entities"] = sensor_entities
+                    updated = True
+                elif title == "Canvas Controls" and control_entities:
+                    card["entities"] = control_entities
+                    updated = True
+                elif title == "Sky Timers" and timer_entities:
+                    card["entities"] = timer_entities
+                    updated = True
+
+        if not updated:
+            print("[lovelace] No canvas cards found to update", flush=True)
+            return
+
+        # Push updated config back to HA
+        r2 = await client.post(f"{HA_URL}/api/lovelace/config", headers=_ha_headers(), json=config)
+        if r2.status_code in (200, 201):
+            print(f"[lovelace] Updated canvas cards: {len(sensor_entities)} sensors, {len(control_entities)} controls, {len(timer_entities)} timers", flush=True)
+        else:
+            print(f"[lovelace] Push failed: {r2.status_code} {r2.text[:200]}", flush=True)
 
 
 # ── Historical trend endpoint ──────────────────────────────────────────────────
