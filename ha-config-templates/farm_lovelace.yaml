@@ -150,12 +150,19 @@ views:
           icon: mdi:palette
         show_empty: false
         entities:
+          # New names (Farm prefix)
           - entity: scene.farm_morning_routine
           - entity: scene.farm_evening_mode
           - entity: scene.farm_all_irrigation_on
           - entity: scene.farm_all_irrigation_off
           - entity: scene.farm_all_off
           - entity: scene.farm_frost_protection
+          # Old names (before Farm prefix — HA caches first entity_id)
+          - entity: scene.morning_routine
+          - entity: scene.evening_mode
+          - entity: scene.all_irrigation_on
+          - entity: scene.all_irrigation_off
+          - entity: scene.frost_protection
         state_filter:
           - operator: "!="
             value: "unavailable"
@@ -168,7 +175,9 @@ views:
         show_empty: false
         entities:
           - entity: automation.sky_auto_irrigate_low_moisture
+          - entity: automation.sky_auto_irrigate_on_low_soil_moisture
           - entity: automation.sky_midday_irrigation_check
+          - entity: automation.sky_midday_irrigation_safety_shutoff
           - entity: automation.sky_timer_auto_off
         state_filter:
           - "on"
@@ -196,6 +205,7 @@ views:
         entities:
           - entity: automation.sky_frost_protection
           - entity: automation.sky_high_fungal_risk
+          - entity: automation.sky_high_fungal_risk_alert
         state_filter:
           - "on"
           - "off"
