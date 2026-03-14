@@ -376,7 +376,7 @@ def _ollama_chat_stream(messages: list[dict], options: dict, deep_think: bool = 
     url = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
     # Ensure num_predict is set to avoid runaway generation
     if deep_think:
-        options.setdefault("num_predict", 4096)
+        options.setdefault("num_predict", 2048)
     else:
         options.setdefault("num_predict", 512)
     payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": True, "options": options}
@@ -386,7 +386,7 @@ def _ollama_chat_stream(messages: list[dict], options: dict, deep_think: bool = 
     mode = "DEEP THINK" if deep_think else "fast"
     print(f"[ollama] POST {url} model={OLLAMA_MODEL} num_predict={options.get('num_predict')} mode={mode}", flush=True)
     try:
-        read_timeout = 300 if deep_think else 120
+        read_timeout = 180 if deep_think else 120
         with requests.post(url, json=payload, stream=True, timeout=(15, read_timeout)) as r:
             print(f"[ollama] HTTP {r.status_code}", flush=True)
             r.raise_for_status()
@@ -1196,10 +1196,6 @@ async def chat(body: dict):
     user_msg = (body.get("message") or "").strip()
     session_id = (body.get("session_id") or "default").strip()
     deep_think = bool(body.get("deep_think", False))
-    # Auto-enable thinking for action commands (user can still force it via toggle)
-    if not deep_think and _is_action_request(user_msg):
-        deep_think = True
-        print(f"[chat] Auto-enabled deep think for action request: {user_msg[:60]}", flush=True)
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
