@@ -163,6 +163,7 @@ export default function App() {
   const [micError, setMicError] = useState(null);
   const [memory, setMemory] = useState(null);
   const [memNote, setMemNote] = useState("");
+  const [deepThink, setDeepThink] = useState(false);
   const [memRawMode, setMemRawMode] = useState(false);
   const [memRawJson, setMemRawJson] = useState("");
   const [memLlmPreview, setMemLlmPreview] = useState(null);
@@ -526,7 +527,7 @@ export default function App() {
       const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, session_id: sessionId }),
+        body: JSON.stringify({ message: text, session_id: sessionId, deep_think: deepThink }),
       });
       const data = await res.json();
       const reply = data.reply || "";
@@ -973,6 +974,18 @@ export default function App() {
                     <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
                       SEND
                     </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem', paddingLeft: '0.25rem' }}>
+                    <button onClick={() => setDeepThink(p => !p)}
+                      style={{ background: deepThink ? 'rgba(168,85,247,0.15)' : 'transparent',
+                        border: `1px solid ${deepThink ? '#a855f7' : 'var(--navy-600)'}`,
+                        color: deepThink ? '#a855f7' : 'var(--text-dim)',
+                        padding: '0.2rem 0.6rem', borderRadius: '4px', cursor: 'pointer',
+                        fontSize: '0.6rem', fontFamily: 'JetBrains Mono', letterSpacing: '0.5px',
+                        transition: 'all 0.2s' }}>
+                      {deepThink ? '🧠 DEEP THINK ON' : '⚡ FAST MODE'}
+                    </button>
+                    {deepThink && <span style={{ fontSize: '0.55rem', color: '#a855f7', fontStyle: 'italic' }}>Extended reasoning enabled — responses may take longer</span>}
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
                     <button

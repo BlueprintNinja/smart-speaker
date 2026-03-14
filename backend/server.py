@@ -280,18 +280,22 @@ def get_kokoro():
 
 
 # ── Ollama helpers ────────────────────────────────────────────────────────────
-def _ollama_chat_stream(messages: list[dict], options: dict):
+def _ollama_chat_stream(messages: list[dict], options: dict, deep_think: bool = False):
     url = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
     # Ensure num_predict is set to avoid runaway generation
-    options.setdefault("num_predict", 512)
+    if deep_think:
+        options.setdefault("num_predict", 4096)
+    else:
+        options.setdefault("num_predict", 512)
     payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": True, "options": options}
-    # Disable extended thinking for reasoning models (qwen3, deepseek-r1, etc.)
-    # This dramatically reduces latency for conversational use cases
+    # Control thinking for reasoning models (qwen3, deepseek-r1, etc.)
     if any(t in OLLAMA_MODEL.lower() for t in ("qwen3", "deepseek-r1", "qwq")):
-        payload["think"] = False
-    print(f"[ollama] POST {url} model={OLLAMA_MODEL} num_predict={options.get('num_predict')}", flush=True)
+        payload["think"] = deep_think
+    mode = "DEEP THINK" if deep_think else "fast"
+    print(f"[ollama] POST {url} model={OLLAMA_MODEL} num_predict={options.get('num_predict')} mode={mode}", flush=True)
     try:
-        with requests.post(url, json=payload, stream=True, timeout=(15, 120)) as r:
+        read_timeout = 300 if deep_think else 120
+        with requests.post(url, json=payload, stream=True, timeout=(15, read_timeout)) as r:
             print(f"[ollama] HTTP {r.status_code}", flush=True)
             r.raise_for_status()
             for line in r.iter_lines():
@@ -933,6 +937,7 @@ async def transcribe(audio: UploadFile = File(...)):
 async def chat(body: dict):
     user_msg = (body.get("message") or "").strip()
     session_id = (body.get("session_id") or "default").strip()
+    deep_think = bool(body.get("deep_think", False))
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
@@ -981,7 +986,7 @@ async def chat(body: dict):
 
     try:
         def _stream():
-            return list(_ollama_chat_stream(messages, {"temperature": 0.6}))
+            return list(_ollama_chat_stream(messages, {"temperature": 0.6}, deep_think=deep_think))
 
         tokens = await loop.run_in_executor(None, _stream)
         if not tokens:
