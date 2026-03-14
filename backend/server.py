@@ -1169,16 +1169,26 @@ async def transcribe(audio: UploadFile = File(...)):
 def _is_action_request(msg: str) -> bool:
     """Detect if the user message looks like a device command that needs structured output."""
     m = msg.lower()
-    action_verbs = [
+    # Multi-word phrases safe for simple substring match
+    phrase_verbs = [
         "turn on", "turn off", "switch on", "switch off", "shut off",
-        "toggle", "activate", "deactivate", "enable", "disable",
-        "start", "stop", "open", "close", "lock", "unlock",
+        "activate", "deactivate", "enable", "disable",
         "set the", "set temperature", "irrigate", "water zone",
+    ]
+    if any(v in m for v in phrase_verbs):
+        return True
+    # Short/ambiguous words need word-boundary matching to avoid false positives
+    # e.g. "farm" should NOT match "arm", "history" should NOT match "stop"
+    boundary_verbs = [
+        "toggle", "start", "stop", "open", "close", "lock", "unlock",
         "dim", "brighten", "arm", "disarm",
     ]
+    for v in boundary_verbs:
+        if re.search(r"\b" + re.escape(v) + r"\b", m):
+            return True
     # Also match "<duration> minute/hour" patterns that imply timed actions
     has_duration = bool(re.search(r"\d+\s*(?:min|hour|hr|sec)", m))
-    return any(v in m for v in action_verbs) or has_duration
+    return has_duration
 
 
 @app.post("/chat")
