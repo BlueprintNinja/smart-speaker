@@ -49,7 +49,7 @@ PERSONA_STYLE = os.getenv("PERSONA_STYLE", "warm, direct, practical farm advisor
 PERSONA_NOTES = os.getenv("PERSONA_NOTES", "")  # extra instructions injected into system prompt
 
 # ── APScheduler (feature 6) ───────────────────────────────────────────────────
-scheduler = AsyncIOScheduler()
+scheduler = AsyncIOScheduler(timezone=datetime.timezone.utc)
 
 # ── System prompt (rebuilt per-request to include live persona settings) ──────
 def _build_system_prompt() -> str:
@@ -203,8 +203,8 @@ async def lifespan(app: FastAPI):
     asyncio.ensure_future(_cache_loop())
     # Start APScheduler for timed device actions and daily digest
     scheduler.start()
-    # Schedule daily farm digest at 7:00 AM local time
-    scheduler.add_job(_daily_digest_job, "cron", hour=7, minute=0, id="daily_digest", replace_existing=True)
+    # Schedule daily farm digest at 12:00 UTC (~7-8 AM US Eastern)
+    scheduler.add_job(_daily_digest_job, "cron", hour=12, minute=0, id="daily_digest", replace_existing=True)
     print("[startup] APScheduler started.", flush=True)
     yield
     scheduler.shutdown(wait=False)
