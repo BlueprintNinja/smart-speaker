@@ -593,6 +593,7 @@ async def chat(body: dict):
             yield f"data: {json.dumps({'event': 'ha_result', 'result': ha_result})}\n\n"
 
         spoken = strip_command_block(full)
+        spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
         conversation.append({"role": "assistant", "content": spoken})
         yield f"data: {json.dumps({'done': True, 'full': spoken})}\n\n"
 
