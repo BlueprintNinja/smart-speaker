@@ -236,9 +236,16 @@ export default function NodeCanvas({ api, lastHaEvent }) {
   const [chatHighlight, setChatHighlight] = useState(null); // entity_id triggered from chat
   const canvasRef = useRef(null);
 
-  // ── Persist canvas to localStorage ──────────────────────────────────────────
+  // ── Persist canvas to localStorage + sync to HA ─────────────────────────────
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges })); } catch {}
+    if (nodes.length > 0 && api) {
+      fetch(`${api}/canvas/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes }),
+      }).catch(() => {});
+    }
   }, [nodes, edges]);
 
   // ── Highlight nodes triggered by main chat commands ──────────────────────────

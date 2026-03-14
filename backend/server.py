@@ -15,6 +15,7 @@ import wave
 import base64
 import tempfile
 import asyncio
+import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -198,6 +199,37 @@ def _ollama_chat_stream(messages: list[dict], options: dict):
 # ── Conversation history ───────────────────────────────────────────────────────
 conversation: list[dict] = []
 
+# ── Sky Memory System ──────────────────────────────────────────────────────────
+MEMORY_PATH = Path("/app/data/sky_memory.json")
+
+def _load_memory() -> dict:
+    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if MEMORY_PATH.exists():
+        try:
+            return json.loads(MEMORY_PATH.read_text())
+        except Exception:
+            pass
+    return {"events": [], "observations": [], "spray_log": [], "notes": []}
+
+def _save_memory(mem: dict):
+    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MEMORY_PATH.write_text(json.dumps(mem, indent=2))
+
+def _memory_summary(mem: dict) -> str:
+    lines = []
+    if mem.get("spray_log"):
+        last = mem["spray_log"][-1]
+        lines.append(f"Last spray: {last.get('date','?')} — {last.get('product','?')}")
+    if mem.get("observations"):
+        last = mem["observations"][-1]
+        lines.append(f"Last observation: {last.get('date','?')} — {last.get('note','?')}")
+    if mem.get("events"):
+        recent = mem["events"][-3:]
+        lines.append("Recent events: " + "; ".join(f"{e.get('type','?')} ({e.get('date','?')})" for e in recent))
+    if mem.get("notes"):
+        lines.append("Notes: " + " | ".join(mem["notes"][-3:]))
+    return "\n".join(lines) if lines else "No memory entries yet."
+
 
 # ── Home Assistant helpers ─────────────────────────────────────────────────────
 def _ha_headers() -> dict:
@@ -370,6 +402,10 @@ async def chat(body: dict):
     if not user_msg:
         return JSONResponse({"reply": "I didn't catch that."})
 
+    # Inject Sky memory into prompt
+    mem = _load_memory()
+    mem_summary = _memory_summary(mem)
+
     # Inject real HA entity list so LLM uses correct entity_ids
     ha_entities = await ha_list_entities()
     if ha_entities:
@@ -386,6 +422,9 @@ async def chat(body: dict):
         dynamic_prompt = SYSTEM_PROMPT + entity_block
     else:
         dynamic_prompt = SYSTEM_PROMPT
+
+    if mem_summary and mem_summary != "No memory entries yet.":
+        dynamic_prompt += f"\n\n== SKY MEMORY (farm history you recorded) ==\n{mem_summary}"
 
     conversation.append({"role": "user", "content": user_msg})
     messages = [{"role": "system", "content": dynamic_prompt}] + conversation
@@ -883,6 +922,192 @@ Keep responses concise and practical for a working farmer. You may also control 
 async def clear_conversation():
     conversation.clear()
     return {"status": "cleared"}
+
+
+# ── Sky Memory endpoints ───────────────────────────────────────────────────────
+@app.get("/memory")
+async def get_memory():
+    """Return Sky's full persistent memory."""
+    return _load_memory()
+
+
+@app.post("/memory/log")
+async def log_memory(body: dict):
+    """
+    Log a farm event to Sky's memory.
+    Body: { type: 'spray'|'observation'|'event'|'note', data: {...} }
+    Types:
+      spray:       { product, rate, target, notes }
+      observation: { note, growth_stage, gdd }
+      event:       { type, description }
+      note:        str — free-form note
+    """
+    mem = _load_memory()
+    mtype = body.get("type", "event")
+    data  = body.get("data", {})
+    now   = datetime.datetime.now().isoformat()
+
+    if mtype == "spray":
+        mem["spray_log"].append({"date": now, **data})
+    elif mtype == "observation":
+        mem["observations"].append({"date": now, **data})
+    elif mtype == "note":
+        mem["notes"].append(f"[{now[:10]}] {data}" if isinstance(data, str) else f"[{now[:10]}] {json.dumps(data)}")
+    else:
+        mem["events"].append({"date": now, "type": mtype, **data})
+
+    _save_memory(mem)
+    return {"status": "logged", "type": mtype}
+
+
+@app.delete("/memory")
+async def clear_memory():
+    _save_memory({"events": [], "observations": [], "spray_log": [], "notes": []})
+    return {"status": "cleared"}
+
+
+# ── Proactive alert webhook (called by HA automations) ────────────────────────
+@app.post("/alert")
+async def proactive_alert(body: dict):
+    """
+    Called by HA automations when a farm sensor threshold is crossed.
+    Generates a spoken TTS briefing and broadcasts it to connected frontends.
+    Body: { sensor: str, state: str, message: str, severity: str }
+    Returns: { text: str, audio_b64: str|None }
+    """
+    sensor   = body.get("sensor", "unknown")
+    state    = body.get("state", "")
+    message  = body.get("message", "")
+    severity = body.get("severity", "warning")
+
+    # Ask LLM to turn the raw alert into natural spoken language
+    prompt = [
+        {"role": "system", "content": "You are Sky, Ray's farm AI assistant. Convert this farm alert into one natural spoken sentence (no formatting, no bullet points). Be concise and start with 'Hey Ray,'"},
+        {"role": "user", "content": f"Alert — {sensor} is now {state}. {message}"}
+    ]
+    loop = asyncio.get_event_loop()
+    try:
+        def _gen():
+            return "".join(_ollama_chat_stream(prompt, {"temperature": 0.3, "num_predict": 80}))
+        spoken = await loop.run_in_executor(None, _gen)
+    except Exception:
+        spoken = message or f"Alert: {sensor} is {state}."
+
+    # Log alert to memory
+    mem = _load_memory()
+    mem["events"].append({"date": datetime.datetime.now().isoformat(), "type": "alert", "sensor": sensor, "state": state, "severity": severity})
+    _save_memory(mem)
+
+    # Generate TTS audio if Kokoro is available
+    audio_b64 = None
+    try:
+        async with GPU_LOCK:
+            wav_bytes, sr = await loop.run_in_executor(None, lambda: synth_wav_bytes(spoken))
+        audio_b64 = base64.b64encode(wav_bytes).decode()
+    except Exception:
+        pass
+
+    return {"text": spoken, "audio_b64": audio_b64, "severity": severity, "sensor": sensor}
+
+
+# ── NodeCanvas virtual device sync ────────────────────────────────────────────
+@app.post("/canvas/sync")
+async def canvas_sync(body: dict):
+    """
+    Push NodeCanvas placeholder nodes as virtual HA entities.
+    Each node becomes a sensor.canvas_* entity in HA so it appears
+    in the HA dashboard and Sky can reference it by entity_id.
+    Body: { nodes: [ { id, type, config: { entity_id, friendly_name, ... } } ] }
+    """
+    nodes = body.get("nodes", [])
+    if not HA_TOKEN:
+        return {"pushed": 0, "error": "HA_TOKEN not set"}
+
+    DOMAIN_ICON = {
+        "light": "mdi:lightbulb",
+        "camera": "mdi:camera",
+        "irrigation": "mdi:water",
+        "tensiometer": "mdi:water-percent",
+        "rainpoint": "mdi:sprout",
+    }
+    pushed = 0
+    errors = []
+    now = datetime.datetime.now().isoformat()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        for node in nodes:
+            ntype  = node.get("type", "unknown")
+            cfg    = node.get("config", {})
+            raw_id = cfg.get("entity_id") or f"canvas_{node.get('id','x')}"
+            # Ensure it's in sensor domain for virtual placeholder
+            entity_id = raw_id if "." in raw_id else f"sensor.{raw_id}"
+            # Prefix canvas_ so they're identifiable
+            if not entity_id.startswith("sensor.canvas_") and not entity_id.startswith("sensor.farm_"):
+                entity_id = "sensor.canvas_" + entity_id.split(".", 1)[-1]
+
+            payload = {
+                "state": "placeholder",
+                "attributes": {
+                    "friendly_name": cfg.get("friendly_name", raw_id),
+                    "icon": DOMAIN_ICON.get(ntype, "mdi:devices"),
+                    "device_type": ntype,
+                    "canvas_node": True,
+                    "last_synced": now,
+                    **{k: v for k, v in cfg.items() if k not in ("entity_id", "friendly_name")},
+                }
+            }
+            try:
+                r = await client.post(
+                    f"{HA_URL}/api/states/{entity_id}",
+                    headers=_ha_headers(), json=payload
+                )
+                if r.status_code in (200, 201):
+                    pushed += 1
+                else:
+                    errors.append(f"{entity_id}: HTTP {r.status_code}")
+            except Exception as e:
+                errors.append(f"{entity_id}: {e}")
+
+    return {"pushed": pushed, "total": len(nodes), "errors": errors}
+
+
+# ── Historical trend endpoint ──────────────────────────────────────────────────
+@app.get("/ha/trend/{entity_id:path}")
+async def ha_trend(entity_id: str, hours: int = 72):
+    """
+    Fetch historical states for a sensor and return a sparkline-friendly
+    list of {t, v} pairs plus computed stats (min, max, mean, delta).
+    Uses HA's /api/history endpoint which is backed by the recorder DB.
+    """
+    if not HA_TOKEN:
+        return {"error": "HA_TOKEN not set", "points": []}
+    start = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+    url = f"{HA_URL}/api/history/period/{start}?filter_entity_id={entity_id}&minimal_response=true&no_attributes=true"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(url, headers=_ha_headers())
+            r.raise_for_status()
+            data = r.json()
+            history = data[0] if data else []
+        points = []
+        for h in history:
+            try:
+                points.append({"t": h["last_changed"], "v": float(h["state"])})
+            except (ValueError, KeyError):
+                pass
+        if not points:
+            return {"entity_id": entity_id, "points": [], "stats": {}}
+        vals = [p["v"] for p in points]
+        stats = {
+            "min":   round(min(vals), 2),
+            "max":   round(max(vals), 2),
+            "mean":  round(sum(vals) / len(vals), 2),
+            "delta": round(vals[-1] - vals[0], 2),
+            "count": len(vals),
+        }
+        return {"entity_id": entity_id, "hours": hours, "points": points, "stats": stats}
+    except Exception as e:
+        return {"error": str(e), "points": []}
 
 
 if __name__ == "__main__":

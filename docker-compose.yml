@@ -60,6 +60,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    volumes:
+      - sky-data:/app/data
     depends_on:
       homeassistant:
         condition: service_started
@@ -100,3 +102,6 @@ services:
       - "80:80"
     depends_on:
       - backend
+
+volumes:
+  sky-data:

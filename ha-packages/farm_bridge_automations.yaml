@@ -1,5 +1,6 @@
 # Farm Bridge Automations - Ray's Berry Farm
 # Fires on sensor.farm_* entities pushed by farm-bridge every 10 minutes.
+# Each automation calls the smart-speaker backend /alert webhook for proactive TTS.
 
 automation:
 
@@ -13,13 +14,20 @@ automation:
         entity_id: sensor.farm_frost_risk
         to: "critical"
     action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_frost_risk"
+          state: "{{ states('sensor.farm_frost_risk') }}"
+          message: >
+            Frost forecast during {{ states('sensor.farm_growth_stage') }} stage.
+            GDD: {{ states('sensor.farm_gdd') }}. Prepare frost protection.
+          severity: "{{ states('sensor.farm_frost_risk') }}"
       - service: persistent_notification.create
         data:
           title: "Frost Risk - {{ states('sensor.farm_growth_stage') }}"
           message: >
             Frost forecast during {{ states('sensor.farm_growth_stage') }} stage.
             GDD: {{ states('sensor.farm_gdd') }}.
-            Check the 7-day forecast and prepare frost protection.
           notification_id: farm_frost
     mode: single
 
@@ -32,13 +40,20 @@ automation:
         for:
           minutes: 20
     action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_fungal_risk"
+          state: "{{ states('sensor.farm_fungal_risk') }}"
+          message: >
+            Fungal risk is {{ states('sensor.farm_fungal_risk') }} out of 100.
+            Spray window is {{ states('sensor.farm_spray_window') }}.
+          severity: "warning"
       - service: persistent_notification.create
         data:
           title: "High Fungal Disease Risk"
           message: >
             Fungal risk score: {{ states('sensor.farm_fungal_risk') }}/100.
             Spray window is {{ states('sensor.farm_spray_window') }}.
-            Growth stage: {{ states('sensor.farm_growth_stage') }}.
           notification_id: farm_fungal
     mode: single
 
@@ -53,6 +68,14 @@ automation:
         entity_id: sensor.farm_fungal_risk
         above: 50
     action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_spray_window"
+          state: "open"
+          message: >
+            Spray window just opened with fungal risk at {{ states('sensor.farm_fungal_risk') }} out of 100.
+            Good conditions for application now.
+          severity: "info"
       - service: persistent_notification.create
         data:
           title: "Spray Window Open"
@@ -71,14 +94,20 @@ automation:
         for:
           minutes: 30
     action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_yield_threat"
+          state: "{{ states('sensor.farm_yield_threat') }}"
+          message: >
+            Composite yield threat is {{ states('sensor.farm_yield_threat') }} out of 100.
+            Stage is {{ states('sensor.farm_growth_stage') }}.
+            SWD is {{ states('sensor.farm_swd_risk') }}.
+          severity: "warning"
       - service: persistent_notification.create
         data:
           title: "Elevated Yield Threat"
           message: >
             Composite yield threat score: {{ states('sensor.farm_yield_threat') }}/100.
-            Stage: {{ states('sensor.farm_growth_stage') }}.
-            SWD: {{ states('sensor.farm_swd_risk') }}.
-            Frost risk: {{ states('sensor.farm_frost_risk') }}.
           notification_id: farm_yield_threat
     mode: single
 
@@ -89,11 +118,16 @@ automation:
         entity_id: sensor.farm_nws_alerts
         above: 0
     action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_nws_alerts"
+          state: "{{ states('sensor.farm_nws_alerts') }}"
+          message: "{{ states('sensor.farm_nws_alerts') }} active NWS weather alerts for Jersey County."
+          severity: "critical"
       - service: persistent_notification.create
         data:
           title: "NWS Weather Alert"
-          message: >
-            {{ states('sensor.farm_nws_alerts') }} active NWS alert(s) for Jersey County.
+          message: "{{ states('sensor.farm_nws_alerts') }} active NWS alert(s) for Jersey County."
           notification_id: farm_nws
     mode: single
 
@@ -104,6 +138,14 @@ automation:
         entity_id: sensor.farm_growth_stage
         to: "Harvest Ready"
     action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_growth_stage"
+          state: "Harvest Ready"
+          message: >
+            GDD threshold reached at {{ states('sensor.farm_gdd') }} GDD.
+            Begin scouting for ripe fruit. SWD pressure is {{ states('sensor.farm_swd_risk') }}.
+          severity: "info"
       - service: persistent_notification.create
         data:
           title: "Harvest Window Open"
@@ -112,3 +154,11 @@ automation:
             SWD pressure: {{ states('sensor.farm_swd_risk') }}.
           notification_id: farm_harvest_ready
     mode: single
+
+rest_command:
+  sky_alert:
+    url: "http://backend:8000/alert"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"sensor": "{{ sensor }}", "state": "{{ state }}", "message": "{{ message }}", "severity": "{{ severity }}"}

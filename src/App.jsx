@@ -144,10 +144,13 @@ export default function App() {
   const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
-  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard
+  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory
   const [showCanvas, setShowCanvas] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
   const [micError, setMicError] = useState(null);
+  const [memory, setMemory] = useState(null);
+  const [memNote, setMemNote] = useState("");
+  const [lastAlert, setLastAlert] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -162,6 +165,36 @@ export default function App() {
       .then(r => r.json())
       .then(d => setHaStatus(d.ha_ok === true))
       .catch(() => setHaStatus(false));
+  }, []);
+
+  // ── Load Sky memory ─────────────────────────────────────────────────────────
+  const loadMemory = () => {
+    fetch(`${API}/memory`).then(r => r.json()).then(setMemory).catch(() => {});
+  };
+  useEffect(() => { loadMemory(); }, []);
+
+  // ── Alert polling — check for proactive TTS alerts from HA automations ──────
+  const lastAlertRef = useRef(null);
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch(`${API}/memory`);
+        const mem = await r.json();
+        const alerts = (mem.events || []).filter(e => e.type === "alert");
+        if (alerts.length === 0) return;
+        const latest = alerts[alerts.length - 1];
+        const key = latest.date + latest.sensor;
+        if (lastAlertRef.current === key) return;
+        lastAlertRef.current = key;
+        setLastAlert(latest);
+        setMemory(mem);
+        // Show in chat
+        const alertMsg = `🚨 Alert: ${latest.sensor} → ${latest.state}`;
+        setMessages(prev => [...prev, { role: "bot", text: alertMsg, isAlert: true }]);
+      } catch (e) { /* silent */ }
+    };
+    const id = setInterval(poll, 30000);
+    return () => clearInterval(id);
   }, []);
 
   // ── Proactive Farm Intelligence ─────────────────────────────────────────────
@@ -436,7 +469,8 @@ export default function App() {
           </div>
           <div className="tab-nav">
             <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬 Chat</button>
-            <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞ Dashboard</button>
+            <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞ Dash</button>
+            <button className={`tab-btn${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>🧠 Memory</button>
           </div>
           <div style={{ padding: '1.5rem' }}>
             <div className="sidebar-stat">
@@ -464,6 +498,85 @@ export default function App() {
 
           {activeTab === 'dashboard' ? (
             <Dashboard api={API} />
+          ) : activeTab === 'memory' ? (
+            <div style={{ flex: 1, overflow: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px' }}>SKY MEMORY</div>
+
+              {/* Quick log */}
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input value={memNote} onChange={e => setMemNote(e.target.value)}
+                  placeholder="Log a note, observation, or spray..."
+                  style={{ flex: 1, background: 'var(--navy-800)', border: '1px solid var(--navy-600)', color: 'white', padding: '0.4rem 0.6rem', borderRadius: '6px', fontSize: '0.8rem' }} />
+                <button onClick={async () => {
+                  if (!memNote.trim()) return;
+                  await fetch(`${API}/memory/log`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'note', data: memNote }) });
+                  setMemNote('');
+                  loadMemory();
+                }} style={{ background: 'var(--navy-700)', border: '1px solid var(--navy-600)', color: 'var(--amber-400)', padding: '0.4rem 0.8rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem' }}>LOG</button>
+                <button onClick={async () => {
+                  if (!confirm('Clear all memory?')) return;
+                  await fetch(`${API}/memory`, { method: 'DELETE' });
+                  loadMemory();
+                }} style={{ background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)', padding: '0.4rem 0.6rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+              </div>
+
+              {memory && (
+                <>
+                  {/* Spray log */}
+                  {memory.spray_log?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Spray Log</div>
+                      {[...memory.spray_log].reverse().map((s, i) => (
+                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.75rem', borderLeft: '3px solid #60a5fa' }}>
+                          <span style={{ color: 'var(--text-dim)' }}>{s.date?.slice(0,10)}</span> — {s.product || 'Unknown product'} {s.rate ? `@ ${s.rate}` : ''} {s.notes ? `· ${s.notes}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Observations */}
+                  {memory.observations?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Observations</div>
+                      {[...memory.observations].reverse().map((o, i) => (
+                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.75rem', borderLeft: '3px solid #4ade80' }}>
+                          <span style={{ color: 'var(--text-dim)' }}>{o.date?.slice(0,10)}</span> — {o.note}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Notes */}
+                  {memory.notes?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Notes</div>
+                      {[...memory.notes].reverse().map((n, i) => (
+                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.75rem', borderLeft: '3px solid var(--amber-500)' }}>
+                          {n}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Events/Alerts */}
+                  {memory.events?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Events & Alerts</div>
+                      {[...memory.events].reverse().slice(0, 20).map((e, i) => (
+                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.72rem', borderLeft: `3px solid ${e.severity === 'critical' ? '#f87171' : e.severity === 'warning' ? '#fbbf24' : '#60a5fa'}` }}>
+                          <span style={{ color: 'var(--text-dim)' }}>{e.date?.slice(0,16)}</span> — {e.type} {e.sensor ? `· ${e.sensor}` : ''} {e.state ? `→ ${e.state}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {(!memory.spray_log?.length && !memory.observations?.length && !memory.notes?.length && !memory.events?.length) && (
+                    <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', fontStyle: 'italic' }}>No memory yet. Log a spray, observation, or note above. Sky will remember it in future conversations.</div>
+                  )}
+                </>
+              )}
+            </div>
           ) : (
             <>
               {/* ── Chat panel ── */}
