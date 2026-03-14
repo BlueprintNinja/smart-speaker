@@ -378,21 +378,23 @@ export default function App() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let botText = "";
-      
+      let buf = "";
+
       // Add initial empty bot message
       setMessages(prev => [...prev, { role: "bot", text: "", sources: [] }]);
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n\n");
-        
+
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop(); // keep incomplete last line in buffer
+
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           try {
-            const data = JSON.parse(line.replace("data: ", ""));
+            const data = JSON.parse(line.slice(6));
             if (data.token) {
               botText += data.token;
               updateLastBotMessage(botText, null, null);
@@ -402,7 +404,7 @@ export default function App() {
             } else if (data.done) {
               playTTS(data.full);
             }
-          } catch (e) { /* partial chunk */ }
+          } catch (e) { /* malformed line */ }
         }
       }
     } catch (err) {
