@@ -34,7 +34,7 @@ OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    "http://localhost:11434")
 OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",   "llama3")
 WHISPER_MODEL  = os.getenv("WHISPER_MODEL",  "medium")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
-WHISPER_DTYPE  = os.getenv("WHISPER_DTYPE",  "float16")
+WHISPER_DTYPE  = os.getenv("WHISPER_DTYPE",  "int8")
 KOKORO_VOICE    = os.getenv("KOKORO_VOICE",    "af_sky")
 GPU_CONCURRENCY = int(os.getenv("GPU_CONCURRENCY", "1"))
 

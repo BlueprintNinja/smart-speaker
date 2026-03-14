@@ -47,7 +47,7 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3:latest}
       - WHISPER_MODEL=${WHISPER_MODEL:-medium}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-      - WHISPER_DTYPE=${WHISPER_DTYPE:-float16}
+      - WHISPER_DTYPE=${WHISPER_DTYPE:-int8}
       - KOKORO_VOICE=${KOKORO_VOICE:-af_sky}
       # HA runs on host network, so use host.docker.internal to reach it
       - HA_URL=${HA_URL:-http://homeassistant:8123}
