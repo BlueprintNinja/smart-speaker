@@ -34,7 +34,7 @@ from kokoro import KPipeline
 # ── Config ────────────────────────────────────────────────────────────────────
 OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    "http://localhost:11434")
 # Mutable model selection — can be changed at runtime via /model endpoint
-_ollama_state  = {"model": os.getenv("OLLAMA_MODEL", "llama3"), "num_ctx": 2048}
+_ollama_state  = {"model": os.getenv("OLLAMA_MODEL", "qwen3.5:4b"), "num_ctx": 4096}
 AVAILABLE_MODELS = [
     "llama3.1:latest",
     "qwen3.5:latest",
