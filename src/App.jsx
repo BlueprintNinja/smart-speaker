@@ -163,6 +163,9 @@ export default function App() {
   const [micError, setMicError] = useState(null);
   const [memory, setMemory] = useState(null);
   const [memNote, setMemNote] = useState("");
+  const [memRawMode, setMemRawMode] = useState(false);
+  const [memRawJson, setMemRawJson] = useState("");
+  const [memLlmPreview, setMemLlmPreview] = useState(null);
   const [lastAlert, setLastAlert] = useState(null);
   // Feature 5: wake word
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
@@ -740,14 +743,32 @@ export default function App() {
             </div>
           ) : activeTab === 'memory' ? (
             <div style={{ flex: 1, overflow: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px' }}>SKY MEMORY</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px' }}>SKY MEMORY</div>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <button onClick={() => {
+                    setMemRawMode(false); setMemLlmPreview(null);
+                  }} style={{ background: !memRawMode && !memLlmPreview ? 'var(--navy-600)' : 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-bright)', padding: '0.2rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.6rem' }}>ENTRIES</button>
+                  <button onClick={() => {
+                    setMemRawMode(true); setMemLlmPreview(null);
+                    setMemRawJson(JSON.stringify(memory, null, 2));
+                  }} style={{ background: memRawMode ? 'var(--navy-600)' : 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-bright)', padding: '0.2rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.6rem' }}>RAW JSON</button>
+                  <button onClick={async () => {
+                    setMemRawMode(false);
+                    const r = await fetch(`${API}/memory/llm-preview`);
+                    const d = await r.json();
+                    setMemLlmPreview(d.llm_context);
+                  }} style={{ background: memLlmPreview ? 'var(--navy-600)' : 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-bright)', padding: '0.2rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.6rem' }}>LLM VIEW</button>
+                </div>
+              </div>
 
               {/* Quick log */}
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <input value={memNote} onChange={e => setMemNote(e.target.value)}
                   placeholder="Log a note, observation, or spray..."
+                  onKeyDown={e => { if (e.key === 'Enter' && memNote.trim()) { e.target.blur(); document.querySelector('[data-mem-log]')?.click(); } }}
                   style={{ flex: 1, background: 'var(--navy-800)', border: '1px solid var(--navy-600)', color: 'white', padding: '0.4rem 0.6rem', borderRadius: '6px', fontSize: '0.8rem' }} />
-                <button onClick={async () => {
+                <button data-mem-log onClick={async () => {
                   if (!memNote.trim()) return;
                   await fetch(`${API}/memory/log`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ type: 'note', data: memNote }) });
@@ -761,15 +782,47 @@ export default function App() {
                 }} style={{ background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)', padding: '0.4rem 0.6rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
               </div>
 
-              {memory && (
+              {/* LLM Preview mode */}
+              {memLlmPreview && (
+                <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: '6px', padding: '0.75rem' }}>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--amber-400)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem' }}>What Sky Sees In Her Prompt</div>
+                  <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.7rem', color: 'var(--text-bright)', fontFamily: 'JetBrains Mono', lineHeight: '1.5', margin: 0 }}>{memLlmPreview}</pre>
+                </div>
+              )}
+
+              {/* Raw JSON editor mode */}
+              {memRawMode && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <textarea value={memRawJson} onChange={e => setMemRawJson(e.target.value)}
+                    style={{ width: '100%', minHeight: '400px', background: 'var(--navy-800)', border: '1px solid var(--navy-600)', color: 'var(--text-bright)', padding: '0.6rem', borderRadius: '6px', fontSize: '0.7rem', fontFamily: 'JetBrains Mono', lineHeight: '1.4', resize: 'vertical' }} />
+                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                    <button onClick={() => { setMemRawMode(false); }} style={{ background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)', padding: '0.3rem 0.8rem', borderRadius: '5px', cursor: 'pointer', fontSize: '0.7rem' }}>CANCEL</button>
+                    <button onClick={async () => {
+                      try {
+                        const parsed = JSON.parse(memRawJson);
+                        await fetch(`${API}/memory`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parsed) });
+                        setMemRawMode(false);
+                        loadMemory();
+                      } catch (e) { alert('Invalid JSON: ' + e.message); }
+                    }} style={{ background: 'var(--amber-400)', border: 'none', color: '#000', padding: '0.3rem 0.8rem', borderRadius: '5px', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 'bold' }}>SAVE</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Entry-by-entry view */}
+              {!memRawMode && !memLlmPreview && memory && (
                 <>
                   {/* Spray log */}
                   {memory.spray_log?.length > 0 && (
                     <div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Spray Log</div>
                       {[...memory.spray_log].reverse().map((s, i) => (
-                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.75rem', borderLeft: '3px solid #60a5fa' }}>
-                          <span style={{ color: 'var(--text-dim)' }}>{s.date?.slice(0,10)}</span> — {s.product || 'Unknown product'} {s.rate ? `@ ${s.rate}` : ''} {s.notes ? `· ${s.notes}` : ''}
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                          <div style={{ flex: 1, background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.75rem', borderLeft: '3px solid #60a5fa' }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{s.date?.slice(0,10)}</span> — {s.product || 'Unknown product'} {s.rate ? `@ ${s.rate}` : ''} {s.notes ? `· ${s.notes}` : ''}
+                          </div>
+                          <button onClick={async () => { await fetch(`${API}/memory/spray_log/${i}`, { method: 'DELETE' }); loadMemory(); }}
+                            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', flexShrink: 0 }}>✕</button>
                         </div>
                       ))}
                     </div>
@@ -780,8 +833,12 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Observations</div>
                       {[...memory.observations].reverse().map((o, i) => (
-                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.75rem', borderLeft: '3px solid #4ade80' }}>
-                          <span style={{ color: 'var(--text-dim)' }}>{o.date?.slice(0,10)}</span> — {o.note}
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                          <div style={{ flex: 1, background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.75rem', borderLeft: '3px solid #4ade80' }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{o.date?.slice(0,10)}</span> — {o.note}
+                          </div>
+                          <button onClick={async () => { await fetch(`${API}/memory/observations/${i}`, { method: 'DELETE' }); loadMemory(); }}
+                            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', flexShrink: 0 }}>✕</button>
                         </div>
                       ))}
                     </div>
@@ -792,8 +849,12 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Notes</div>
                       {[...memory.notes].reverse().map((n, i) => (
-                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.75rem', borderLeft: '3px solid var(--amber-500)' }}>
-                          {n}
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                          <div style={{ flex: 1, background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.75rem', borderLeft: '3px solid var(--amber-500)' }}>
+                            {n}
+                          </div>
+                          <button onClick={async () => { await fetch(`${API}/memory/notes/${i}`, { method: 'DELETE' }); loadMemory(); }}
+                            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', flexShrink: 0 }}>✕</button>
                         </div>
                       ))}
                     </div>
@@ -804,14 +865,34 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Events & Alerts</div>
                       {[...memory.events].reverse().slice(0, 20).map((e, i) => (
-                        <div key={i} style={{ background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', marginBottom: '0.3rem', fontSize: '0.72rem', borderLeft: `3px solid ${e.severity === 'critical' ? '#f87171' : e.severity === 'warning' ? '#fbbf24' : '#60a5fa'}` }}>
-                          <span style={{ color: 'var(--text-dim)' }}>{e.date?.slice(0,16)}</span> — {e.type} {e.sensor ? `· ${e.sensor}` : ''} {e.state ? `→ ${e.state}` : ''}
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                          <div style={{ flex: 1, background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.72rem', borderLeft: `3px solid ${e.severity === 'critical' ? '#f87171' : e.severity === 'warning' ? '#fbbf24' : '#60a5fa'}` }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{e.date?.slice(0,16)}</span> — {e.type} {e.sensor ? `· ${e.sensor}` : ''} {e.state ? `→ ${e.state}` : ''}
+                          </div>
+                          <button onClick={async () => { await fetch(`${API}/memory/events/${i}`, { method: 'DELETE' }); loadMemory(); }}
+                            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', flexShrink: 0 }}>✕</button>
                         </div>
                       ))}
                     </div>
                   )}
 
-                  {(!memory.spray_log?.length && !memory.observations?.length && !memory.notes?.length && !memory.events?.length) && (
+                  {/* Decisions */}
+                  {memory.decisions?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Decisions</div>
+                      {[...memory.decisions].reverse().slice(0, 20).map((d, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                          <div style={{ flex: 1, background: 'var(--navy-800)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.72rem', borderLeft: `3px solid ${d.outcome ? '#4ade80' : '#a78bfa'}` }}>
+                            <span style={{ color: 'var(--text-dim)' }}>{d.date?.slice(0,10)}</span> — {d.recommendation} {d.outcome ? `→ ${d.outcome}` : ' (pending)'}
+                          </div>
+                          <button onClick={async () => { await fetch(`${API}/memory/decisions/${i}`, { method: 'DELETE' }); loadMemory(); }}
+                            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', flexShrink: 0 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {(!memory.spray_log?.length && !memory.observations?.length && !memory.notes?.length && !memory.events?.length && !memory.decisions?.length) && (
                     <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', fontStyle: 'italic' }}>No memory yet. Log a spray, observation, or note above. Sky will remember it in future conversations.</div>
                   )}
                 </>

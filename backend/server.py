@@ -1607,6 +1607,59 @@ async def clear_memory():
     return {"status": "cleared"}
 
 
+@app.put("/memory")
+async def replace_memory(body: dict):
+    """Replace the entire memory JSON. Body should be the full memory dict."""
+    required = {"events", "observations", "spray_log", "notes", "decisions"}
+    for key in required:
+        if key not in body:
+            body[key] = []
+    _save_memory(body)
+    return {"status": "replaced"}
+
+
+@app.delete("/memory/{category}/{index}")
+async def delete_memory_entry(category: str, index: int):
+    """Delete a specific entry by category and index (0-indexed from newest)."""
+    mem = _load_memory()
+    entries = mem.get(category)
+    if entries is None:
+        return JSONResponse({"error": f"Unknown category: {category}"}, status_code=400)
+    # Index is from newest (reversed), convert to actual index
+    actual_idx = len(entries) - 1 - index
+    if actual_idx < 0 or actual_idx >= len(entries):
+        return JSONResponse({"error": "Index out of range"}, status_code=400)
+    removed = entries.pop(actual_idx)
+    _save_memory(mem)
+    return {"status": "deleted", "category": category, "removed": removed}
+
+
+@app.put("/memory/{category}/{index}")
+async def update_memory_entry(category: str, index: int, body: dict):
+    """Update a specific entry by category and index (0-indexed from newest)."""
+    mem = _load_memory()
+    entries = mem.get(category)
+    if entries is None:
+        return JSONResponse({"error": f"Unknown category: {category}"}, status_code=400)
+    actual_idx = len(entries) - 1 - index
+    if actual_idx < 0 or actual_idx >= len(entries):
+        return JSONResponse({"error": "Index out of range"}, status_code=400)
+    new_data = body.get("data")
+    if new_data is None:
+        return JSONResponse({"error": "Missing 'data' in body"}, status_code=400)
+    entries[actual_idx] = new_data
+    _save_memory(mem)
+    return {"status": "updated", "category": category, "entry": new_data}
+
+
+@app.get("/memory/llm-preview")
+async def memory_llm_preview(q: str = ""):
+    """Show exactly what the LLM sees as memory context for a given query."""
+    mem = _load_memory()
+    summary = _search_memory(mem, q, top_n=10)
+    return {"query": q, "llm_context": f"== SKY MEMORY (relevant farm history) ==\n{summary}"}
+
+
 @app.get("/memory/search")
 async def memory_search(q: str = ""):
     """Feature 1: Search memory by keyword relevance."""
