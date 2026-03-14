@@ -809,7 +809,7 @@ export default function App() {
       const reply = data.reply || "";
 
       // Build bot message with all metadata
-      const botMsg = { role: "bot", text: reply };
+      const botMsg = { role: "bot", text: reply, model: data.model || "" };
       if (data.ha_result) {
         botMsg.haResult = data.ha_result;
         setLastHaEvent({ ...data.ha_result, entity_id: data.entity_id || "" });
@@ -949,8 +949,11 @@ export default function App() {
                   ) : (
                     messages.map((msg, i) => (
                       <div key={i} className={`mobile-msg ${msg.role}`}>
-                        <div style={{ fontSize: '0.6rem', color: 'var(--navy-400)', marginBottom: '2px', fontFamily: 'JetBrains Mono' }}>
-                          {msg.role === 'user' ? 'YOU' : 'SKY'}
+                        <div style={{ fontSize: '0.6rem', color: 'var(--navy-400)', marginBottom: '2px', fontFamily: 'JetBrains Mono', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <span>{msg.role === 'user' ? 'YOU' : 'SKY'}</span>
+                          {msg.role === 'bot' && msg.model && (
+                            <span style={{ fontSize: '0.5rem', color: 'var(--navy-500)', background: 'var(--navy-800)', padding: '1px 5px', borderRadius: '3px' }}>{msg.model.split('/').pop()}</span>
+                          )}
                         </div>
                         <div>{msg.text || "..."}</div>
                         {msg.role === 'bot' && msg.haResult && (
@@ -1538,7 +1541,12 @@ export default function App() {
                   ) : (
                     messages.map((msg, i) => (
                       <div key={i} className={`msg ${msg.role}`}>
-                        <div className="msg-meta">{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</div>
+                        <div className="msg-meta" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <span>{msg.role === 'user' ? 'YOU' : 'ASSISTANT'}</span>
+                          {msg.role === 'bot' && msg.model && (
+                            <span style={{ fontSize: '0.55rem', color: 'var(--navy-400)', background: 'var(--navy-800)', padding: '1px 5px', borderRadius: '3px', fontWeight: 'normal' }}>{msg.model.split('/').pop()}</span>
+                          )}
+                        </div>
                         <div className="bubble">
                           {msg.text || "..."}
                           {msg.role === 'bot' && msg.haResult && (

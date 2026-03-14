@@ -1558,7 +1558,7 @@ async def chat(body: dict):
     # Feature 2: Persist assistant reply to session
     _append_session(session_id, "assistant", spoken)
 
-    result = {"reply": spoken}
+    result = {"reply": spoken, "model": _ollama_state["model"]}
     if ha_result is not None:
         result["ha_result"] = ha_result
         result["entity_id"] = cmd_entity_id
