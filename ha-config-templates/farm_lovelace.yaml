@@ -75,6 +75,12 @@ views:
             name: Master Valve
           - entity: sensor.blackberry_row_status
             name: Current Row
+          - entity: sensor.rainpoint_soil_moisture
+            name: Soil Moisture (RainPoint)
+          - entity: sensor.soil_moisture_status
+            name: Soil Status
+          - entity: input_number.rainpoint_wet_threshold
+            name: Skip Irrigation Above
           - entity: automation.sky_irrigation_daily_gatekeeper
             name: Daily Gatekeeper
           - entity: script.manual_blackberry_watering

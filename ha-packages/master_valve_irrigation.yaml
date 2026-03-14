@@ -33,6 +33,8 @@ template:
           {% endif %}
         attributes:
           master_valve: "{{ states('switch.master_valve') }}"
+          soil_moisture: "{{ states('sensor.rainpoint_soil_moisture') }}%"
+          soil_status: "{{ states('sensor.soil_moisture_status') }}"
           total_zones: 8
           schedule_start: "06:00"
           schedule_end: "08:00"
@@ -61,6 +63,12 @@ automation:
             value_template: >
               {{ state_attr('weather.home', 'forecast') is not none and
                  state_attr('weather.home', 'forecast')[0].precipitation_probability | default(0) < 40 }}
+          # Skip if soil is already wet (above wet threshold from RainPoint)
+          - condition: template
+            value_template: >
+              {{ states('sensor.rainpoint_soil_moisture') | float(-1) < 0 or
+                 states('sensor.rainpoint_soil_moisture') | float(0) <
+                 states('input_number.rainpoint_wet_threshold') | float(75) }}
     action:
       - service: switch.turn_on
         target:
@@ -71,7 +79,9 @@ automation:
           state: "on"
           message: >
             Master valve opened — daily blackberry irrigation starting.
-            Weather is clear ({{ states('weather.home') }}).
+            Weather: {{ states('weather.home') }}.
+            Soil moisture: {{ states('sensor.rainpoint_soil_moisture') }}%
+            (threshold: {{ states('input_number.rainpoint_wet_threshold') }}%).
           severity: "info"
       - delay: "02:20:00"
       - service: switch.turn_off
@@ -101,14 +111,23 @@ automation:
             value_template: >
               {{ state_attr('weather.home', 'forecast') is not none and
                  state_attr('weather.home', 'forecast')[0].precipitation_probability | default(0) >= 40 }}
+          # Also skip if soil is already saturated
+          - condition: template
+            value_template: >
+              {{ states('sensor.rainpoint_soil_moisture') | float(-1) >= 0 and
+                 states('sensor.rainpoint_soil_moisture') | float(0) >=
+                 states('input_number.rainpoint_wet_threshold') | float(75) }}
     action:
       - service: rest_command.sky_alert
         data:
           sensor: "switch.master_valve"
           state: "skipped"
           message: >
-            Daily irrigation skipped — weather is {{ states('weather.home') }}
-            with {{ state_attr('weather.home', 'forecast')[0].precipitation_probability | default('unknown') }}% rain probability.
+            Daily irrigation skipped —
+            Weather: {{ states('weather.home') }},
+            Rain probability: {{ state_attr('weather.home', 'forecast')[0].precipitation_probability | default('unknown') }}%,
+            Soil moisture: {{ states('sensor.rainpoint_soil_moisture') }}%
+            (wet threshold: {{ states('input_number.rainpoint_wet_threshold') }}%).
           severity: "info"
 
 # ── Script: Manual Blackberry Watering (30min override) ─────────────────────
