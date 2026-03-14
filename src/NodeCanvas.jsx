@@ -162,11 +162,21 @@ const canvasStyles = `
 .ha-panel {
   width: 240px; flex-shrink: 0; background: rgba(6,13,26,0.9);
   border-left: 1px solid var(--navy-700); display: flex; flex-direction: column;
+  transition: width 0.25s ease; overflow: hidden;
+}
+.ha-panel.collapsed {
+  width: 32px;
 }
 .ha-panel-header {
   padding: 1rem; border-bottom: 1px solid var(--navy-700);
   font-size: 0.75rem; font-weight: 600; color: var(--amber-400); letter-spacing: 1px;
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; white-space: nowrap;
 }
+.ha-panel-toggle {
+  background: transparent; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 0.75rem; padding: 2px 4px; flex-shrink: 0;
+}
+.ha-panel-toggle:hover { color: var(--amber-400); }
 .ha-panel-body { flex: 1; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; }
 .ha-entity-row {
   background: var(--navy-800); border: 1px solid var(--navy-700); border-radius: 6px;
@@ -217,6 +227,7 @@ export default function NodeCanvas({ api, lastHaEvent }) {
   const [haStates, setHaStates] = useState({});    // entity_id -> { state, attributes }
   const [chatHighlight, setChatHighlight] = useState(null); // entity_id triggered from chat
   const [pulsingNode, setPulsingNode] = useState(null); // node.id currently pulsing
+  const [haPanelCollapsed, setHaPanelCollapsed] = useState(false);
   const canvasRef = useRef(null);
 
   // ── Persist canvas to localStorage + sync to HA ─────────────────────────────
@@ -499,9 +510,18 @@ export default function NodeCanvas({ api, lastHaEvent }) {
         </div>
 
         {/* ── HA Entity Status Panel ── */}
-        <div className="ha-panel">
-          <div className="ha-panel-header">⊞ HA ENTITIES</div>
-          <div className="ha-panel-body">
+        <div className={`ha-panel${haPanelCollapsed ? ' collapsed' : ''}`}>
+          <div className="ha-panel-header">
+            {haPanelCollapsed ? (
+              <button className="ha-panel-toggle" onClick={() => setHaPanelCollapsed(false)} title="Expand HA panel">◀</button>
+            ) : (
+              <>
+                <span>⊞ HA ENTITIES</span>
+                <button className="ha-panel-toggle" onClick={() => setHaPanelCollapsed(true)} title="Collapse HA panel">▶</button>
+              </>
+            )}
+          </div>
+          <div className="ha-panel-body" style={{ display: haPanelCollapsed ? 'none' : '' }}>
             {nodes.length === 0 && (
               <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", fontStyle: "italic" }}>
                 Add nodes to the canvas — they will appear as real HA entities automatically.

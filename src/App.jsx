@@ -42,7 +42,17 @@ body {
 .sidebar {
   width: 320px; border-right: 1px solid var(--navy-700);
   display: flex; flex-direction: column; background: rgba(11, 21, 38, 0.5);
+  transition: width 0.25s ease;
+  overflow: hidden; flex-shrink: 0;
 }
+.sidebar.collapsed {
+  width: 52px;
+}
+.sidebar-toggle {
+  background: transparent; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 0.85rem; padding: 4px 6px; border-radius: 4px; transition: color 0.2s;
+}
+.sidebar-toggle:hover { color: var(--amber-400); }
 
 .main-view { flex: 1; display: flex; flex-direction: column; position: relative; }
 
@@ -159,6 +169,7 @@ export default function App() {
   const [haStatus, setHaStatus] = useState(null); // null | true | false
   const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory | decisions
   const [showCanvas, setShowCanvas] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
   const [micError, setMicError] = useState(null);
   const [memory, setMemory] = useState(null);
@@ -620,20 +631,27 @@ export default function App() {
       <div className="app-container">
         
         {/* ── Sidebar ── */}
-        <aside className="sidebar">
-          <div className="header" style={{ borderBottom: '1px solid var(--navy-700)' }}>
-            <h2 style={{ fontSize: '0.9rem', letterSpacing: '1px', color: 'var(--amber-400)' }}>SMART SPEAKER</h2>
-            <div className={`status-badge ${orbState !== 'idle' ? 'active' : ''}`}>
-              {orbState}
-            </div>
+        <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
+          <div className="header" style={{ borderBottom: '1px solid var(--navy-700)', padding: sidebarCollapsed ? '1rem 0.5rem' : '1.5rem', justifyContent: sidebarCollapsed ? 'center' : 'space-between' }}>
+            {sidebarCollapsed ? (
+              <button className="sidebar-toggle" onClick={() => setSidebarCollapsed(false)} title="Expand sidebar">▶</button>
+            ) : (
+              <>
+                <h2 style={{ fontSize: '0.9rem', letterSpacing: '1px', color: 'var(--amber-400)' }}>SMART SPEAKER</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div className={`status-badge ${orbState !== 'idle' ? 'active' : ''}`}>{orbState}</div>
+                  <button className="sidebar-toggle" onClick={() => setSidebarCollapsed(true)} title="Collapse sidebar">◀</button>
+                </div>
+              </>
+            )}
           </div>
-          <div className="tab-nav">
+          <div className="tab-nav" style={{ flexDirection: sidebarCollapsed ? 'column' : 'row' }}>
             <button className={`tab-btn${activeTab === 'chat' ? ' active' : ''}`} onClick={() => setActiveTab('chat')}>💬</button>
             <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞</button>
             <button className={`tab-btn${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>🧠</button>
             <button className={`tab-btn${activeTab === 'decisions' ? ' active' : ''}`} onClick={() => { setActiveTab('decisions'); loadDecisions(); }}>📋</button>
           </div>
-          <div style={{ padding: '1.5rem' }}>
+          <div style={{ padding: '1.5rem', display: sidebarCollapsed ? 'none' : 'block' }}>
             <div className="sidebar-stat">
               <span>LLM</span>
               <span className="dot dot-green" title="Ollama" />
