@@ -657,18 +657,25 @@ export default function App() {
             {activeTimers.length > 0 && (
               <div style={{ marginTop: '0.75rem' }}>
                 <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.35rem' }}>Active Timers</div>
-                {activeTimers.map(t => (
-                  <div key={t.job_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    background: 'var(--navy-800)', borderRadius: '5px', padding: '0.3rem 0.5rem',
-                    fontSize: '0.65rem', marginBottom: '0.25rem', border: '1px solid var(--navy-600)' }}>
-                    <span style={{ color: 'var(--text-bright)' }}>{(t.args?.[0] || '').split('.')[1]?.replace(/_/g,' ') || t.args?.[0]}</span>
-                    <span style={{ color: 'var(--amber-400)' }}>{t.run_at ? new Date(t.run_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '...'}</span>
-                    <button onClick={async () => {
-                      await fetch(`${API}/alerts/timers/${t.job_id}`, { method: 'DELETE' });
-                      setActiveTimers(prev => prev.filter(x => x.job_id !== t.job_id));
-                    }} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0 2px', fontSize: '0.65rem' }}>✕</button>
-                  </div>
-                ))}
+                {activeTimers.map(t => {
+                  const tid = t.timer_id || t.job_id;
+                  const label = t.entity_id
+                    ? t.entity_id.split('.')[1]?.replace(/_/g, ' ')
+                    : (t.args?.[0] || '').split('.')[1]?.replace(/_/g, ' ') || tid;
+                  const timeInfo = t.remaining || (t.run_at ? new Date(t.run_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '...');
+                  return (
+                    <div key={tid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      background: 'var(--navy-800)', borderRadius: '5px', padding: '0.3rem 0.5rem',
+                      fontSize: '0.65rem', marginBottom: '0.25rem', border: '1px solid var(--navy-600)' }}>
+                      <span style={{ color: 'var(--text-bright)' }}>{label}</span>
+                      <span style={{ color: 'var(--amber-400)' }}>{timeInfo}</span>
+                      <button onClick={async () => {
+                        await fetch(`${API}/alerts/timers/${encodeURIComponent(tid)}`, { method: 'DELETE' });
+                        setActiveTimers(prev => prev.filter(x => (x.timer_id || x.job_id) !== tid));
+                      }} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0 2px', fontSize: '0.65rem' }}>✕</button>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {/* Feature 7: Digest banner */}

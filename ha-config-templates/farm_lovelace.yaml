@@ -70,7 +70,7 @@ views:
       - type: entity-filter
         card:
           type: entities
-          title: Canvas Devices
+          title: Canvas Devices (Status)
           icon: mdi:hexagon-multiple
         show_empty: false
         entities:
@@ -86,6 +86,38 @@ views:
         state_filter:
           - operator: "!="
             value: "unavailable"
+
+      - type: entity-filter
+        card:
+          type: entities
+          title: Canvas Controls
+          icon: mdi:toggle-switch
+        show_empty: false
+        entities:
+          - entity: input_boolean.irrigation_zone_1
+          - entity: input_boolean.irrigation_zone_2
+          - entity: input_boolean.irrigation_zone_3
+          - entity: input_boolean.light_barn
+          - entity: input_boolean.light_field
+        state_filter:
+          - operator: "!="
+            value: "unavailable"
+
+      - type: entity-filter
+        card:
+          type: entities
+          title: Active Timers
+          icon: mdi:timer-outline
+        show_empty: false
+        entities:
+          - entity: timer.sky_irrigation_zone_1
+          - entity: timer.sky_irrigation_zone_2
+          - entity: timer.sky_irrigation_zone_3
+          - entity: timer.sky_light_barn
+          - entity: timer.sky_light_field
+        state_filter:
+          - "active"
+          - "paused"
 
   - title: Sky Assistant
     icon: mdi:robot

@@ -1,0 +1,50 @@
+# Smart Speaker Helpers - Ray's Berry Farm
+# Seed entries to ensure the input_boolean and timer integrations are loaded,
+# enabling REST API config endpoints for dynamic creation from the canvas.
+
+input_boolean:
+  sky_canvas_init:
+    name: "Sky Canvas Init"
+    icon: mdi:canvas
+    initial: false
+
+timer:
+  sky_init:
+    name: "Sky Timer Init"
+    duration: "00:00:01"
+
+# REST command for HA automations to notify the backend on timer expiry
+rest_command:
+  sky_alert:
+    url: "http://smart-speaker-backend:8000/alert"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"sensor": "{{ sensor }}", "state": "{{ state }}",
+       "message": "{{ message }}", "severity": "{{ severity }}"}
+
+# Generic automation: fires when ANY Sky-managed timer finishes.
+# Convention: timer.sky_{slug} → turns off input_boolean.{slug}
+automation:
+  - id: sky_timer_auto_off
+    alias: "Sky - Timer Auto-Off"
+    description: "Turns off the associated canvas device when a Sky timer expires"
+    trigger:
+      - platform: event
+        event_type: timer.finished
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.entity_id.startswith('timer.sky_') }}"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: >
+            input_boolean.{{ trigger.event.data.entity_id | replace('timer.sky_', '') }}
+      - service: rest_command.sky_alert
+        data:
+          sensor: "input_boolean.{{ trigger.event.data.entity_id | replace('timer.sky_', '') }}"
+          state: "timer_expired"
+          message: >
+            Timer expired — {{ trigger.event.data.entity_id
+            | replace('timer.sky_', '') | replace('_', ' ') }} has been turned off.
+          severity: "info"

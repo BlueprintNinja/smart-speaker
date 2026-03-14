@@ -161,11 +161,14 @@ JSON command to turn it on, also emit a TIMER tag to schedule automatic turn-off
 [TIMER: <entity_id>, <minutes>, <domain>]
 
 Examples:
-- "Turn on zone 1 for 30 minutes" → JSON turn_on + [TIMER: switch.irrigation_zone_1, 30, switch]
+- "Turn on zone 1 for 30 minutes" → JSON turn_on + [TIMER: input_boolean.irrigation_zone_1, 30, input_boolean]
 - "Turn on barn lights for 1 hour" → JSON turn_on + [TIMER: light.barn_lights, 60, light]
+
+The timer is managed natively by Home Assistant — it persists across restarts and shows in the HA dashboard.
 
 RULES for TIMER:
 - Always include the domain so the auto-off fires the correct service.
+- For canvas devices (irrigation, switches), use the input_boolean entity_id shown in the CANVAS DEVICES section.
 - Confirm the duration verbally: "Turning on zone 1 for 30 minutes, Ray — I'll turn it off automatically."
 - Do NOT emit TIMER for actions that don't have a natural end (locks, scenes, thermostat setpoints)."""
 
@@ -457,14 +460,27 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
     if not HA_TOKEN:
         return {"error": "HA_TOKEN not configured"}
 
-    # Canvas virtual entities — handle directly via states API
+    # Canvas virtual entities — if created via states API fallback, handle directly
     if entity_id and _is_canvas_entity(entity_id):
-        if service in ("turn_on", "toggle"):
-            return await _canvas_set_state(entity_id, "on")
-        elif service == "turn_off":
-            return await _canvas_set_state(entity_id, "off")
-        else:
-            return await _canvas_set_state(entity_id, service)
+        helpers = _load_canvas_helpers()
+        slug = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
+        config_id = helpers.get(slug, "")
+        if config_id == "states_fallback":
+            # States-API entities don't respond to services — set state directly
+            new_state = "on" if service in ("turn_on", "toggle") else "off"
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get(f"{HA_URL}/api/states/{entity_id}", headers=_ha_headers())
+                    attrs = r.json().get("attributes", {}) if r.status_code == 200 else {}
+                    r2 = await client.post(f"{HA_URL}/api/states/{entity_id}", headers=_ha_headers(),
+                                           json={"state": new_state, "attributes": attrs})
+                    if r2.status_code in (200, 201):
+                        print(f"[canvas] Set {entity_id} → {new_state} (states fallback)", flush=True)
+                        return {"ok": True, "state": new_state}
+                return {"error": f"States API returned {r2.status_code}"}
+            except Exception as e:
+                return {"error": str(e)}
+        # Config API entities are real helpers — HA handles services natively, fall through
 
     # Pre-check: entity must exist in HA cache (skip check for homeassistant domain)
     if entity_id and domain != "homeassistant":
@@ -588,12 +604,102 @@ def extract_timer(llm_response: str) -> dict | None:
     }
 
 
-async def _timer_auto_off(entity_id: str, domain: str):
-    """Called by APScheduler after timer expires — turns entity off and logs a spoken reminder."""
-    print(f"[timer] Auto-off firing for {entity_id} ({domain})", flush=True)
-    result = await ha_call_service(domain, "turn_off", entity_id)
+async def _ha_create_timer(slug: str, duration_str: str) -> str | None:
+    """Create a timer helper in HA via config API. Returns config entry ID or None."""
+    timer_eid = f"timer.sky_{slug}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Check if timer already exists
+            r = await client.get(f"{HA_URL}/api/states/{timer_eid}", headers=_ha_headers())
+            if r.status_code == 200:
+                print(f"[timer] {timer_eid} already exists", flush=True)
+                return "existing"
+
+            # Create via config API
+            r2 = await client.post(
+                f"{HA_URL}/api/config/timer/config",
+                headers=_ha_headers(),
+                json={"name": f"Sky {slug.replace('_', ' ').title()}", "icon": "mdi:timer", "duration": duration_str},
+            )
+            if r2.status_code in (200, 201):
+                data = r2.json()
+                entry_id = data.get("id", "")
+                print(f"[timer] Created {timer_eid} via config API (id={entry_id})", flush=True)
+                return entry_id
+            else:
+                print(f"[timer] Config API failed for {timer_eid}: {r2.status_code} {r2.text}", flush=True)
+                # Fallback: create via states API
+                payload = {"state": "idle", "attributes": {"friendly_name": f"Sky {slug.replace('_', ' ').title()}", "icon": "mdi:timer"}}
+                r3 = await client.post(f"{HA_URL}/api/states/{timer_eid}", headers=_ha_headers(), json=payload)
+                if r3.status_code in (200, 201):
+                    print(f"[timer] Created {timer_eid} via states API (fallback)", flush=True)
+                    return "states_fallback"
+    except Exception as e:
+        print(f"[timer] Create error for {timer_eid}: {e}", flush=True)
+    return None
+
+
+async def _ha_start_timer(slug: str, minutes: float) -> bool:
+    """Start an HA timer. Requires timer integration loaded (see ha-packages/smart_speaker_helpers.yaml)."""
+    timer_eid = f"timer.sky_{slug}"
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    secs = int((minutes * 60) % 60)
+    duration = f"{hours:02d}:{mins:02d}:{secs:02d}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{HA_URL}/api/services/timer/start",
+                headers=_ha_headers(),
+                json={"entity_id": timer_eid, "duration": duration},
+            )
+            if r.status_code == 200:
+                print(f"[timer] Started {timer_eid} for {duration}", flush=True)
+                return True
+            else:
+                print(f"[timer] Start failed for {timer_eid}: {r.status_code} {r.text}", flush=True)
+    except Exception as e:
+        print(f"[timer] Start error for {timer_eid}: {e}", flush=True)
+    return False
+
+
+async def schedule_timer(entity_id: str, minutes: float, domain: str) -> str:
+    """Schedule an auto-off using HA-native timers. Returns timer entity_id.
+    The HA automation in smart_speaker_helpers.yaml handles the actual turn-off
+    and alert notification when the timer finishes."""
+    slug = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
+    timer_eid = f"timer.sky_{slug}"
+
+    # Ensure timer entity exists
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    secs = int((minutes * 60) % 60)
+    duration_str = f"{hours:02d}:{mins:02d}:{secs:02d}"
+    await _ha_create_timer(slug, duration_str)
+
+    # Start the timer
+    started = await _ha_start_timer(slug, minutes)
+    if started:
+        print(f"[timer] HA-native timer {timer_eid} running for {minutes}min → auto-off {entity_id}", flush=True)
+    else:
+        # Fallback: use APScheduler if HA timer didn't work
+        job_id = f"timer_{entity_id}_{int(time.time())}"
+        run_at = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
+        scheduler.add_job(
+            _timer_auto_off_fallback, "date", run_date=run_at,
+            args=[entity_id, domain], id=job_id, replace_existing=True,
+        )
+        print(f"[timer] Fallback: APScheduler job {job_id} for {entity_id} in {minutes}min", flush=True)
+        return job_id
+
+    return timer_eid
+
+
+async def _timer_auto_off_fallback(entity_id: str, domain: str):
+    """APScheduler fallback — only used when HA timer creation fails."""
+    print(f"[timer] APScheduler fallback auto-off for {entity_id} ({domain})", flush=True)
+    await ha_call_service(domain, "turn_off", entity_id)
     spoken = f"Hey Ray, the timer has expired — {entity_id.split('.')[-1].replace('_', ' ')} has been turned off."
-    # Log as an event
     mem = _load_memory()
     mem.setdefault("events", []).append({
         "date": datetime.datetime.now().isoformat(),
@@ -603,7 +709,6 @@ async def _timer_auto_off(entity_id: str, domain: str):
         "severity": "info",
     })
     _save_memory(mem)
-    # Generate TTS for the reminder and store it so frontend can pick it up
     try:
         loop = asyncio.get_event_loop()
         async with GPU_LOCK:
@@ -617,18 +722,6 @@ async def _timer_auto_off(entity_id: str, domain: str):
     except Exception as e:
         print(f"[timer] TTS failed: {e}", flush=True)
         _pending_timer_alerts.append({"text": spoken, "audio_b64": None, "entity_id": entity_id, "severity": "info"})
-
-
-def schedule_timer(entity_id: str, minutes: float, domain: str) -> str:
-    """Schedule an auto-off job. Returns a job_id."""
-    job_id = f"timer_{entity_id}_{int(time.time())}"
-    run_at = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
-    scheduler.add_job(
-        _timer_auto_off, "date", run_date=run_at,
-        args=[entity_id, domain], id=job_id, replace_existing=True,
-    )
-    print(f"[timer] Scheduled auto-off for {entity_id} in {minutes}min (job={job_id})", flush=True)
-    return job_id
 
 
 # Pending timer alerts — polled by /alerts/pending endpoint
@@ -915,8 +1008,8 @@ async def chat(body: dict):
             # ── Feature 6: TIMER tool ─────────────────────────────────────
             timer_cfg = extract_timer(full)
             if timer_cfg:
-                job_id = schedule_timer(timer_cfg["entity_id"], timer_cfg["minutes"], timer_cfg["domain"])
-                timer_info = {"entity_id": timer_cfg["entity_id"], "minutes": timer_cfg["minutes"], "job_id": job_id}
+                timer_id = await schedule_timer(timer_cfg["entity_id"], timer_cfg["minutes"], timer_cfg["domain"])
+                timer_info = {"entity_id": timer_cfg["entity_id"], "minutes": timer_cfg["minutes"], "timer_id": timer_id}
 
     except Exception as e:
         full = f"[LLM error: {e}]"
@@ -1538,25 +1631,55 @@ async def get_pending_alerts():
 
 @app.get("/alerts/timers")
 async def list_timers():
-    """Return all currently scheduled timer jobs."""
-    jobs = [
-        {
-            "job_id": job.id,
-            "run_at": job.next_run_time.isoformat() if job.next_run_time else None,
-            "args": list(job.args) if job.args else [],
-        }
-        for job in scheduler.get_jobs()
-        if job.id.startswith("timer_")
-    ]
-    return {"timers": jobs}
+    """Return all active timers — both HA-native and APScheduler fallback."""
+    timers = []
+    # HA-native timers (timer.sky_*)
+    cached = _get_cached_ha_entities()
+    for e in cached:
+        eid = e.get("entity_id", "")
+        if eid.startswith("timer.sky_") and e.get("state") in ("active", "paused"):
+            attrs = e.get("attributes", {})
+            slug = eid.replace("timer.sky_", "")
+            timers.append({
+                "timer_id": eid,
+                "entity_id": f"input_boolean.{slug}",
+                "state": e.get("state"),
+                "remaining": attrs.get("remaining"),
+                "duration": attrs.get("duration"),
+                "source": "ha",
+            })
+    # APScheduler fallback timers
+    for job in scheduler.get_jobs():
+        if job.id.startswith("timer_"):
+            timers.append({
+                "timer_id": job.id,
+                "run_at": job.next_run_time.isoformat() if job.next_run_time else None,
+                "args": list(job.args) if job.args else [],
+                "source": "apscheduler",
+            })
+    return {"timers": timers}
 
 
-@app.delete("/alerts/timers/{job_id}")
-async def cancel_timer(job_id: str):
-    """Cancel a pending timer by job_id."""
+@app.delete("/alerts/timers/{timer_id:path}")
+async def cancel_timer(timer_id: str):
+    """Cancel a pending timer — supports both HA timers and APScheduler jobs."""
+    # Try HA timer cancel first
+    if timer_id.startswith("timer.sky_"):
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    f"{HA_URL}/api/services/timer/cancel",
+                    headers=_ha_headers(),
+                    json={"entity_id": timer_id},
+                )
+                if r.status_code == 200:
+                    return {"status": "cancelled", "timer_id": timer_id}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    # APScheduler fallback
     try:
-        scheduler.remove_job(job_id)
-        return {"status": "cancelled", "job_id": job_id}
+        scheduler.remove_job(timer_id)
+        return {"status": "cancelled", "timer_id": timer_id}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=404)
 
@@ -1675,39 +1798,61 @@ def _save_canvas_helpers(data: dict):
     CANVAS_HELPERS_PATH.write_text(json.dumps(data, indent=2))
 
 
-async def _ha_create_canvas_entity(client, slug: str, name: str, icon: str) -> bool:
-    """Create an input_boolean entity in HA via the states API (always works)."""
+async def _ha_create_input_boolean(client, slug: str, name: str, icon: str) -> str | None:
+    """Create a real input_boolean helper in HA via config API. Returns config entry ID or None.
+    Requires the input_boolean integration to be loaded (see ha-packages/smart_speaker_helpers.yaml).
+    Falls back to states API if config API is unavailable."""
     eid = f"input_boolean.{slug}"
-    payload = {
-        "state": "off",
-        "attributes": {
-            "friendly_name": name,
-            "icon": icon,
-            "canvas_virtual": True,
-        }
-    }
+    # Try config API first (creates a real helper that responds to services)
     try:
-        r = await client.post(f"{HA_URL}/api/states/{eid}", headers=_ha_headers(), json=payload)
+        r = await client.post(
+            f"{HA_URL}/api/config/input_boolean/config",
+            headers=_ha_headers(),
+            json={"name": name, "icon": icon},
+        )
         if r.status_code in (200, 201):
-            print(f"[canvas_sync] Created {eid} via states API", flush=True)
-            return True
+            data = r.json()
+            entry_id = data.get("id", "")
+            print(f"[canvas_sync] Created {eid} via config API (id={entry_id})", flush=True)
+            return entry_id
         else:
-            print(f"[canvas_sync] states API create failed for {eid}: {r.status_code} {r.text}", flush=True)
+            print(f"[canvas_sync] Config API failed for {eid}: {r.status_code}, falling back to states API", flush=True)
     except Exception as e:
-        print(f"[canvas_sync] states API create error for {eid}: {e}", flush=True)
-    return False
+        print(f"[canvas_sync] Config API error for {eid}: {e}, falling back to states API", flush=True)
+
+    # Fallback: states API (entity won't respond to services but will exist)
+    try:
+        payload = {"state": "off", "attributes": {"friendly_name": name, "icon": icon, "canvas_virtual": True}}
+        r2 = await client.post(f"{HA_URL}/api/states/{eid}", headers=_ha_headers(), json=payload)
+        if r2.status_code in (200, 201):
+            print(f"[canvas_sync] Created {eid} via states API (fallback)", flush=True)
+            return "states_fallback"
+    except Exception:
+        pass
+    return None
 
 
-async def _ha_delete_canvas_entity(client, slug: str) -> bool:
+async def _ha_delete_input_boolean(client, slug: str, config_id: str) -> bool:
     """Delete a canvas-created input_boolean from HA."""
     eid = f"input_boolean.{slug}"
+    # Try config API deletion if we have a real config ID
+    if config_id and config_id != "states_fallback":
+        try:
+            r = await client.delete(
+                f"{HA_URL}/api/config/input_boolean/config/{config_id}",
+                headers=_ha_headers(),
+            )
+            if r.status_code in (200, 204):
+                print(f"[canvas_sync] Deleted {eid} via config API", flush=True)
+                return True
+        except Exception:
+            pass
+    # Fallback: delete via states API
     try:
         r = await client.delete(f"{HA_URL}/api/states/{eid}", headers=_ha_headers())
         if r.status_code in (200, 204):
-            print(f"[canvas_sync] Deleted {eid}", flush=True)
+            print(f"[canvas_sync] Deleted {eid} via states API", flush=True)
             return True
-        else:
-            print(f"[canvas_sync] delete failed for {eid}: {r.status_code}", flush=True)
     except Exception as e:
         print(f"[canvas_sync] delete error for {eid}: {e}", flush=True)
     return False
@@ -1718,25 +1863,6 @@ def _is_canvas_entity(entity_id: str) -> bool:
     helpers = _load_canvas_helpers()
     slug = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
     return slug in helpers
-
-
-async def _canvas_set_state(entity_id: str, state: str) -> dict:
-    """Directly set the state of a canvas virtual entity via HA states API."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Get current attributes so we preserve them
-            r = await client.get(f"{HA_URL}/api/states/{entity_id}", headers=_ha_headers())
-            attrs = {}
-            if r.status_code == 200:
-                attrs = r.json().get("attributes", {})
-            payload = {"state": state, "attributes": attrs}
-            r2 = await client.post(f"{HA_URL}/api/states/{entity_id}", headers=_ha_headers(), json=payload)
-            if r2.status_code in (200, 201):
-                print(f"[canvas] Set {entity_id} → {state}", flush=True)
-                return {"ok": True, "state": state}
-            return {"error": f"HA returned {r2.status_code}"}
-    except Exception as e:
-        return {"error": str(e)}
 
 
 @app.post("/canvas/sync")
@@ -1785,22 +1911,23 @@ async def canvas_sync(body: dict):
         # ── 1. Delete helpers for removed nodes ──────────────────────────────
         removed_slugs = set(helpers.keys()) - set(current_slugs.keys())
         for slug in removed_slugs:
-            helpers.pop(slug, None)
-            ok = await _ha_delete_canvas_entity(client, slug)
+            config_id = helpers.pop(slug, None)
+            ok = await _ha_delete_input_boolean(client, slug, config_id or "")
             if ok:
                 deleted += 1
-            # Also clean up the sensor.canvas_* state entry
-            try:
-                await client.delete(f"{HA_URL}/api/states/sensor.canvas_{slug}", headers=_ha_headers())
-            except Exception:
-                pass
+            # Also clean up the sensor.canvas_* state entry and any timer
+            for cleanup_eid in [f"sensor.canvas_{slug}", f"timer.sky_{slug}"]:
+                try:
+                    await client.delete(f"{HA_URL}/api/states/{cleanup_eid}", headers=_ha_headers())
+                except Exception:
+                    pass
 
-        # ── 2. Create virtual entities for new actionable nodes ──────────────
+        # ── 2. Create real input_boolean helpers for new actionable nodes ────
         for slug, info in current_slugs.items():
             if slug not in helpers:
-                ok = await _ha_create_canvas_entity(client, slug, info["name"], info["icon"])
-                if ok:
-                    helpers[slug] = "canvas"
+                config_id = await _ha_create_input_boolean(client, slug, info["name"], info["icon"])
+                if config_id:
+                    helpers[slug] = config_id
                     created += 1
                 else:
                     errors.append(f"input_boolean.{slug}: creation failed")

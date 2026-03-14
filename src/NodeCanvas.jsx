@@ -247,10 +247,12 @@ export default function NodeCanvas({ api, lastHaEvent }) {
   useEffect(() => {
     if (!lastHaEvent?.entity_id) return;
     const entityId = lastHaEvent.entity_id;
-    const match = nodes.find(n =>
-      n.config.entity_id === entityId ||
-      resolveEntityId(n) === entityId
-    );
+    const eventSlug = entityId.includes(".") ? entityId.split(".").slice(1).join(".") : entityId;
+    const match = nodes.find(n => {
+      const nodeEid = n.config.entity_id || "";
+      const nodeSlug = nodeEid.includes(".") ? nodeEid.split(".").slice(1).join(".") : nodeEid;
+      return nodeEid === entityId || resolveEntityId(n) === entityId || nodeSlug === eventSlug;
+    });
     if (match) {
       setPulsingNode(match.id);
       setTimeout(() => setPulsingNode(null), 2000);

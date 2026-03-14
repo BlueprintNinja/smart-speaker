@@ -31,6 +31,15 @@ homeassistant:
 Copy-Item $lovelaceSrc $lovelaceDst -Force
 Write-Host "PATCHED: Copied farm_lovelace.yaml to ha-config" -ForegroundColor Green
 
+# --- Patch 3: Copy ha-packages into ha-config/packages ---
+$pkgSrc = "$root\ha-packages"
+$pkgDst = "$root\ha-config\packages"
+if (-not (Test-Path $pkgDst)) { New-Item -ItemType Directory -Path $pkgDst -Force | Out-Null }
+Get-ChildItem $pkgSrc -Filter "*.yaml" | ForEach-Object {
+    Copy-Item $_.FullName "$pkgDst\$($_.Name)" -Force
+    Write-Host "PATCHED: Copied $($_.Name) to ha-config/packages" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "Restart Home Assistant to apply all changes:" -ForegroundColor Yellow
 Write-Host "  docker compose restart homeassistant" -ForegroundColor Cyan
