@@ -278,10 +278,37 @@ export default function App() {
 
   // Global audio serialization — chain all playback so nothing overlaps
   const audioChainRef = useRef(Promise.resolve());
+  // Persistent Audio element for iOS Safari compatibility (autoplay policy)
+  const audioElRef = useRef(null);
+  const audioUnlockedRef = useRef(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const bottomRef = useRef(null);
+
+  // iOS audio unlock: create a single Audio element and "prime" it on first user gesture
+  useEffect(() => {
+    const el = new Audio();
+    el.playsInline = true;
+    el.setAttribute("playsinline", "");
+    audioElRef.current = el;
+
+    const unlock = () => {
+      if (audioUnlockedRef.current) return;
+      // Play a silent data URI to unlock the audio element
+      el.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+      el.play().then(() => {
+        audioUnlockedRef.current = true;
+        console.log("[audio] iOS audio unlocked");
+      }).catch(() => {});
+    };
+    document.addEventListener("touchstart", unlock, { once: false });
+    document.addEventListener("click", unlock, { once: false });
+    return () => {
+      document.removeEventListener("touchstart", unlock);
+      document.removeEventListener("click", unlock);
+    };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -656,11 +683,25 @@ export default function App() {
   };
 
   // Play a blob URL and return a promise that resolves when audio finishes
+  // Uses persistent Audio element for iOS Safari compatibility
   const _playUrl = (url) => new Promise((resolve) => {
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-    audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-    audio.play().catch(() => resolve());
+    const el = audioElRef.current;
+    if (!el) {
+      // Fallback: create new Audio if ref somehow missing
+      const audio = new Audio(url);
+      audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+      audio.play().catch(() => resolve());
+      return;
+    }
+    el.onended = () => { URL.revokeObjectURL(url); el.onended = null; el.onerror = null; resolve(); };
+    el.onerror = () => { URL.revokeObjectURL(url); el.onended = null; el.onerror = null; resolve(); };
+    el.src = url;
+    el.play().catch((err) => {
+      console.warn("[audio] play() rejected:", err.message);
+      URL.revokeObjectURL(url);
+      resolve();
+    });
   });
 
   // Speak text via /tts_audio — serialized so nothing overlaps
