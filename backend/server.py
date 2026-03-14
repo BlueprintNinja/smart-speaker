@@ -1231,11 +1231,13 @@ async def chat(body: dict):
         return JSONResponse({"reply": "I didn't catch that."})
 
     # Feature 1: Contextual memory retrieval — score entries against this query
+    t0 = time.time()
     mem = _load_memory()
     mem_summary = _search_memory(mem, user_msg)
 
     # Feature 2: Session-aware conversation history
     session_history = _get_session(session_id)
+    print(f"[chat][timing] mem+session: {time.time()-t0:.2f}s", flush=True)
 
     # Use cached HA entities — never block /chat on a live HA fetch
     ha_entities = _get_cached_ha_entities()
@@ -1307,6 +1309,8 @@ async def chat(body: dict):
         dynamic_prompt += f"\n\n== SKY MEMORY (relevant farm history) ==\n{mem_summary}"
 
     _append_session(session_id, "user", user_msg)
+    prompt_len = len(dynamic_prompt)
+    print(f"[chat][timing] prompt build: {time.time()-t0:.2f}s (prompt={prompt_len} chars)", flush=True)
     messages = [{"role": "system", "content": dynamic_prompt}] + session_history
 
     full = ""
@@ -1315,10 +1319,12 @@ async def chat(body: dict):
     loop = asyncio.get_event_loop()
 
     try:
+        t_llm = time.time()
         def _stream():
             return list(_ollama_chat_stream(messages, {"temperature": 0.6}, deep_think=deep_think))
 
         tokens = await loop.run_in_executor(None, _stream)
+        print(f"[chat][timing] LLM call 1: {time.time()-t_llm:.2f}s ({len(tokens)} chunks)", flush=True)
         if not tokens:
             full = "[No response from LLM — check Ollama is running and model is pulled]"
         else:
@@ -1369,6 +1375,7 @@ async def chat(body: dict):
                 def _stream2():
                     return list(_ollama_chat_stream(trend_messages, {"temperature": 0.4}))
                 tokens2 = await loop.run_in_executor(None, _stream2)
+                print(f"[chat][timing] FETCH_TREND LLM pass: {time.time()-t_llm:.2f}s", flush=True)
                 full = _strip_think_blocks("".join(tokens2)) if tokens2 else trend_summary
 
             # ── LOGBOOK tool ──────────────────────────────────────────────
@@ -1409,6 +1416,7 @@ async def chat(body: dict):
                 def _stream_lb():
                     return list(_ollama_chat_stream(lb_messages, {"temperature": 0.4}))
                 tokens_lb = await loop.run_in_executor(None, _stream_lb)
+                print(f"[chat][timing] FETCH_LOGBOOK LLM pass: {time.time()-t_llm:.2f}s", flush=True)
                 full = _strip_think_blocks("".join(tokens_lb)) if tokens_lb else lb_summary
 
             # ── Feature 6: TIMER tool ─────────────────────────────────────
@@ -1472,6 +1480,7 @@ async def chat(body: dict):
     # ── Extraction re-prompt: if the response looks like an action confirmation but
     #    has no JSON command, ask the LLM a quick focused question to extract it ──
     if not all_cmds and _is_action_request(user_msg):
+        t_extract = time.time()
         print(f"[chat] Action detected but no JSON — running extraction re-prompt", flush=True)
         extract_prompt = (
             "You are a JSON extraction tool. The user asked a smart home assistant to do something, "
@@ -1501,7 +1510,7 @@ async def chat(body: dict):
         ]
         try:
             def _extract_stream():
-                return list(_ollama_chat_stream(extract_messages, {"temperature": 0.1, "num_predict": 512}, deep_think=True))
+                return list(_ollama_chat_stream(extract_messages, {"temperature": 0.1, "num_predict": 256}))
             extract_tokens = await loop.run_in_executor(None, _extract_stream)
             if extract_tokens:
                 extract_text = "".join(extract_tokens)
@@ -1520,9 +1529,11 @@ async def chat(body: dict):
                     print(f"[extract] Recovered {len(all_cmds)} commands", flush=True)
                 else:
                     print(f"[extract] No commands extracted from re-prompt", flush=True)
+                print(f"[chat][timing] extraction re-prompt: {time.time()-t_extract:.2f}s", flush=True)
         except Exception as ex:
             print(f"[extract] Re-prompt failed: {ex}", flush=True)
 
+    t_exec = time.time()
     # Execute all commands
     cmd_entity_id = ""
     for cmd in all_cmds:
@@ -1552,6 +1563,9 @@ async def chat(body: dict):
             ha_result = {"error": str(e)}
             cmd_entity_id = t_eid
 
+    if all_cmds:
+        print(f"[chat][timing] HA exec ({len(all_cmds)} cmds): {time.time()-t_exec:.2f}s", flush=True)
+
     spoken = strip_command_block(full)
     spoken = strip_markdown_for_tts(spoken)
 
@@ -1562,7 +1576,7 @@ async def chat(body: dict):
     _append_session(session_id, "assistant", spoken)
 
     elapsed = round(time.time() - t_start, 2)
-    print(f"[chat] Done in {elapsed}s (model={_ollama_state['model']})", flush=True)
+    print(f"[chat][timing] TOTAL: {elapsed}s (model={_ollama_state['model']} num_ctx={_ollama_state['num_ctx']})", flush=True)
     result = {"reply": spoken, "model": _ollama_state["model"], "elapsed_s": elapsed}
     if ha_result is not None:
         result["ha_result"] = ha_result
