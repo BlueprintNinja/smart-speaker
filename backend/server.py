@@ -33,7 +33,13 @@ from kokoro import KPipeline
 
 # ── Config ────────────────────────────────────────────────────────────────────
 OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    "http://localhost:11434")
-OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",   "llama3")
+# Mutable model selection — can be changed at runtime via /model endpoint
+_ollama_state  = {"model": os.getenv("OLLAMA_MODEL", "llama3")}
+AVAILABLE_MODELS = [
+    "llama3.1:latest",
+    "qwen3.5:latest",
+    "hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_0",
+]
 WHISPER_MODEL  = os.getenv("WHISPER_MODEL",  "medium")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 WHISPER_DTYPE  = os.getenv("WHISPER_DTYPE",  "int8")
@@ -379,12 +385,13 @@ def _ollama_chat_stream(messages: list[dict], options: dict, deep_think: bool = 
         options.setdefault("num_predict", 2048)
     else:
         options.setdefault("num_predict", 512)
-    payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": True, "options": options}
+    model = _ollama_state["model"]
+    payload = {"model": model, "messages": messages, "stream": True, "options": options}
     # Control thinking for reasoning models (qwen3, deepseek-r1, etc.)
-    if any(t in OLLAMA_MODEL.lower() for t in ("qwen3", "deepseek-r1", "qwq")):
+    if any(t in model.lower() for t in ("qwen3", "deepseek-r1", "qwq")):
         payload["think"] = deep_think
     mode = "DEEP THINK" if deep_think else "fast"
-    print(f"[ollama] POST {url} model={OLLAMA_MODEL} num_predict={options.get('num_predict')} mode={mode}", flush=True)
+    print(f"[ollama] POST {url} model={model} num_predict={options.get('num_predict')} mode={mode}", flush=True)
     try:
         read_timeout = 180 if deep_think else 120
         with requests.post(url, json=payload, stream=True, timeout=(15, read_timeout)) as r:
@@ -1133,7 +1140,7 @@ async def health():
 
     return {
         "status": "ok",
-        "ollama_model": OLLAMA_MODEL,
+        "ollama_model": _ollama_state["model"],
         "ollama_ok": ollama_ok,
         "whisper_model": WHISPER_MODEL,
         "whisper_device": WHISPER_DEVICE,
@@ -1143,6 +1150,26 @@ async def health():
         "ha_ok": ha_ok,
         "gpu": gpu_info,
     }
+
+
+@app.get("/models")
+async def get_models():
+    """Return available models and the currently active one."""
+    return {"models": AVAILABLE_MODELS, "active": _ollama_state["model"]}
+
+
+@app.post("/model")
+async def set_model(body: dict):
+    """Switch the active LLM model at runtime."""
+    model = (body.get("model") or "").strip()
+    if not model:
+        return JSONResponse({"error": "model is required"}, status_code=400)
+    _ollama_state["model"] = model
+    # Add to available list if not already there
+    if model not in AVAILABLE_MODELS:
+        AVAILABLE_MODELS.append(model)
+    print(f"[model] Switched to: {model}", flush=True)
+    return {"active": model}
 
 
 @app.post("/transcribe")
@@ -1825,14 +1852,14 @@ async def ha_dashboard():
 @app.get("/debug")
 async def debug():
     """Connectivity debug — checks Ollama reachability and lists available models."""
-    result = {"ollama_host": OLLAMA_HOST, "ollama_model": OLLAMA_MODEL}
+    result = {"ollama_host": OLLAMA_HOST, "ollama_model": _ollama_state["model"]}
     try:
         r = requests.get(f"{OLLAMA_HOST.rstrip('/')}/api/tags", timeout=5)
         result["ollama_reachable"] = True
         result["ollama_status"] = r.status_code
         data = r.json()
         result["models"] = [m["name"] for m in data.get("models", [])]
-        result["model_available"] = any(OLLAMA_MODEL in m for m in result["models"])
+        result["model_available"] = any(_ollama_state["model"] in m for m in result["models"])
     except Exception as e:
         result["ollama_reachable"] = False
         result["ollama_error"] = str(e)

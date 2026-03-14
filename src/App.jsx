@@ -261,6 +261,9 @@ export default function App() {
   const [memRawJson, setMemRawJson] = useState("");
   const [memLlmPreview, setMemLlmPreview] = useState(null);
   const [lastAlert, setLastAlert] = useState(null);
+  // Model selector
+  const [availableModels, setAvailableModels] = useState([]);
+  const [activeModel, setActiveModel] = useState("");
   // Feature 5: wake word
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const wakeWordRef = useRef(false);
@@ -342,6 +345,26 @@ export default function App() {
       .then(d => setHaStatus(d.ha_ok === true))
       .catch(() => setHaStatus(false));
   }, []);
+
+  // ── Model selector ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    fetch(`${API}/models`)
+      .then(r => r.json())
+      .then(d => {
+        setAvailableModels(d.models || []);
+        setActiveModel(d.active || "");
+      })
+      .catch(() => {});
+  }, []);
+
+  const switchModel = (model) => {
+    setActiveModel(model);
+    fetch(`${API}/model`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    }).catch(() => {});
+  };
 
   // ── Load Sky memory ─────────────────────────────────────────────────────────
   const loadMemory = () => {
@@ -1133,6 +1156,24 @@ export default function App() {
                     <span className={`dot ${s.ok ? 'dot-green' : 'dot-red'}`} />
                   </div>
                 ))}
+                {availableModels.length > 0 && (
+                  <div style={{ marginTop: '0.6rem' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>LLM Model</div>
+                    <select
+                      value={activeModel}
+                      onChange={e => switchModel(e.target.value)}
+                      style={{
+                        width: '100%', background: 'var(--navy-800)', color: 'var(--amber-400)',
+                        border: '1px solid var(--navy-600)', borderRadius: '6px', padding: '0.5rem',
+                        fontSize: '0.75rem', fontFamily: 'JetBrains Mono', cursor: 'pointer',
+                      }}
+                    >
+                      {availableModels.map(m => (
+                        <option key={m} value={m}>{m.split('/').pop()}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <a href="http://192.168.254.131:8123" target="_blank" rel="noopener noreferrer"
                   style={{ display: 'block', textAlign: 'center', marginTop: '0.75rem', padding: '0.6rem', borderRadius: '8px',
                     border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.08)',
@@ -1192,9 +1233,26 @@ export default function App() {
             <button className={`tab-btn${activeTab === 'decisions' ? ' active' : ''}`} onClick={() => { setActiveTab('decisions'); loadDecisions(); }}>📋</button>
           </div>
           <div style={{ padding: '1.5rem', display: sidebarCollapsed ? 'none' : 'block' }}>
-            <div className="sidebar-stat">
-              <span>LLM</span>
-              <span className="dot dot-green" title="Ollama" />
+            <div className="sidebar-stat" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.3rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>LLM</span>
+                <span className="dot dot-green" title="Ollama" />
+              </div>
+              {availableModels.length > 0 && (
+                <select
+                  value={activeModel}
+                  onChange={e => switchModel(e.target.value)}
+                  style={{
+                    background: 'var(--navy-800)', color: 'var(--amber-400)', border: '1px solid var(--navy-600)',
+                    borderRadius: '4px', padding: '0.25rem 0.3rem', fontSize: '0.6rem',
+                    fontFamily: 'JetBrains Mono', cursor: 'pointer', width: '100%',
+                  }}
+                >
+                  {availableModels.map(m => (
+                    <option key={m} value={m}>{m.split('/').pop()}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div className="sidebar-stat">
               <span>WHISPER</span>
