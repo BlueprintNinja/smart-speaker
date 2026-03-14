@@ -358,10 +358,6 @@ export default function App() {
           setDigest(d);
           if (lastDigestDay !== today) {
             localStorage.setItem("sky_digest_day", today);
-            // Auto-play digest audio if available
-            if (d.audio_b64) {
-              playAudioB64(d.audio_b64);
-            }
           }
           digestShownRef.current = true;
         }
@@ -387,13 +383,7 @@ export default function App() {
         const data = await r.json();
         const alerts = data.alerts || [];
         for (const alert of alerts) {
-          // Play audio if present
-          if (alert.audio_b64) {
-            try {
-              playAudioB64(alert.audio_b64);
-            } catch (_) {}
-          }
-          // Show in chat
+          // Show in chat (silent — no auto-TTS)
           setMessages(prev => [...prev, {
             role: "bot",
             text: alert.text,
@@ -493,7 +483,6 @@ export default function App() {
 
       if (data.brief) {
         setMessages(prev => [...prev, { role: "bot", text: `🌿 ${data.brief}`, isFarmBrief: true }]);
-        playTTS(data.brief);
       }
     } catch (e) {
       console.warn("Farm prime failed:", e);
