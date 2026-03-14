@@ -302,6 +302,14 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
     if not HA_TOKEN:
         return {"error": "HA_TOKEN not configured"}
 
+    # Pre-check: entity must exist in HA cache (skip check for homeassistant domain)
+    if entity_id and domain != "homeassistant":
+        cached = _get_cached_ha_entities()
+        known_ids = {e["entity_id"] for e in cached}
+        if known_ids and entity_id not in known_ids:
+            print(f"[ha_call] SKIP — entity not in HA: {entity_id}", flush=True)
+            return {"error": f"Entity '{entity_id}' not found in Home Assistant. Check the entity ID or create it in HA first."}
+
     payload = {"entity_id": entity_id}
     if extra:
         # Strip fields that HA rejects for simple on/off services
