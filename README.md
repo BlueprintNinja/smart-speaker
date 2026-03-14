@@ -14,7 +14,8 @@ Voice-driven home/farm automation assistant powered by:
 1. **Docker Desktop** installed and running
 2. **Ollama** installed natively on your PC (so it can access your GPU directly)
    - Download: https://ollama.com
-   - Pull your model: `ollama pull llama3` (or any model you prefer)
+   - Recommended model: `ollama pull qwen2.5:7b` (faster and better instruction-following than llama3)
+   - Or: `ollama pull llama3` for a well-known alternative
 3. **Node.js 18+** for the frontend dev server
 4. **NVIDIA GPU** with drivers + NVIDIA Container Toolkit for GPU passthrough in Docker
 
@@ -90,17 +91,33 @@ Open http://localhost:5173
   - *"Lock the back door"*
   - *"Open the gate"*
   - *"Start the irrigation zone 2"*
+  - *"What's the fungal risk today?"*
+  - *"When did I last spray Captan?"* (Sky checks her memory)
 
 The assistant speaks the response and shows a confirmation badge when a device command executes.
+
+### Dashboard Tab (⊞)
+Live farm insights panel driven by `sensor.farm_*` entities in Home Assistant:
+- Color-coded alert cards: critical / warning / info / positive
+- NWS weather alerts, frost risk, fungal pressure, SWD, spray window status
+- GDD, chill hours, days-to-harvest, VPD, soil moisture
+
+### Memory Tab (🧠)
+Sky's persistent farm log — survives container restarts:
+- **Log notes, observations, or spray records** via the input box
+- Sky automatically sees all memory in every chat conversation
+- Sections: Spray Log · Observations · Notes · Events & Alerts
+- Proactive alerts from HA automations appear here automatically
 
 ### Node Canvas Tab (⬡ Nodes)
 Build a visual map of your devices before they're physically wired up:
 
-1. Drag node types from the left palette onto the canvas: **Light, Camera, Tensiometer, Irrigation**
+1. Drag node types from the left palette onto the canvas: **Light, Camera, Tensiometer, Irrigation, RainPoint**
 2. Fill in each node's `entity_id` and friendly name
 3. Connect nodes by dragging from output port → input port
 4. Use the **Command Tester** panel to run a voice command or pick a node + action
 5. Results show the exact HA API call that would be made — live if `HA_TOKEN` is set, dry-run otherwise
+6. **Nodes are automatically synced to HA** as `sensor.canvas_*` virtual entities on every save
 
 ---
 
@@ -215,6 +232,29 @@ Sky monitors Ray's Berry Farm automatically and speaks up when something needs a
 - **Critical alerts:** If frost risk, SWD pressure, or NWS alerts are detected, Sky generates and speaks a briefing immediately on page load
 - **Every 60 minutes:** Sky gives an unprompted spoken farm update
 - **Dashboard tab:** Live farm insights panel shows color-coded cards (critical/warning/positive/info)
+- **Proactive HA alerts:** HA automations in `ha-packages/farm_bridge_automations.yaml` POST to `/alert` when sensor thresholds are crossed — Sky generates natural speech, TTS audio, and logs it to Memory
+- **Alert polling:** Frontend checks for new alerts every 30 seconds and surfaces them in the chat automatically
+
+### Activating HA Automations
+
+Run the patch script once after cloning or pulling (PowerShell on Windows):
+
+```powershell
+.\scripts\patch-ha-config.ps1
+docker compose restart homeassistant
+```
+
+This copies `ha-packages/` into the HA config directory and enables the `farm_bridge_automations.yaml` REST commands. Once active, HA will call `http://backend:8000/alert` whenever farm sensor thresholds are crossed.
+
+### Testing an Alert Manually
+
+```powershell
+Invoke-RestMethod -Uri http://localhost:8000/alert -Method POST `
+  -ContentType "application/json" `
+  -Body '{"sensor":"sensor.farm_fungal_risk","state":"85","message":"Fungal risk critical.","severity":"critical"}'
+```
+
+Expected response includes `text` (Sky's spoken phrasing) and `audio_b64` (WAV as base64).
 
 ---
 
@@ -250,15 +290,21 @@ nginx (frontend container)
     │  proxies /api/* → backend:8000
     ▼
 FastAPI Backend (Docker, port 8000)
-    ├── /transcribe    → faster-whisper STT (GPU + CPU fallback)
-    ├── /chat          → Ollama LLM → intent extraction → HA API call → SSE stream
-    ├── /tts_audio     → Kokoro TTS (af_sky) → WAV at 24kHz
-    ├── /ha/*          → Home Assistant REST API passthrough
-    └── /test_command  → Node canvas dry-run / live command tester
+    ├── /transcribe      → faster-whisper STT (GPU + CPU fallback)
+    ├── /chat            → Ollama LLM → intent extraction → HA API call → SSE stream
+    ├── /tts_audio       → Kokoro TTS (af_sky) → WAV at 24kHz
+    ├── /alert           → Proactive alert webhook (HA automations → natural TTS → Memory log)
+    ├── /memory          → GET/POST/DELETE Sky's persistent farm memory (JSON)
+    ├── /canvas/sync     → Push NodeCanvas nodes as sensor.canvas_* virtual HA entities
+    ├── /ha/trend/{id}   → Historical sensor stats from HA recorder (min/max/mean/delta)
+    ├── /farm/prime      → Inject Open-Meteo + NWS farm data into LLM context
+    ├── /ha/*            → Home Assistant REST API passthrough
+    └── /test_command    → Node canvas dry-run / live command tester
     │
-    ├──→ Ollama (native on host, GPU access)  host.docker.internal:11434
-    └──→ Home Assistant (Docker, host network) host.docker.internal:8123
-             └── controls all smart home/farm devices
+    ├──→ Ollama (native on host, GPU access)   host.docker.internal:11434
+    ├──→ Home Assistant (Docker, speaker-net)  homeassistant:8123
+    │        └── automations POST /alert on farm sensor threshold crossings
+    └──→ Farm Bridge (Docker, speaker-net)     pushes 15 sensor.farm_* entities to HA every 10 min
 ```
 
 ---
@@ -268,10 +314,10 @@ FastAPI Backend (Docker, port 8000)
 | Variable | Default | Description |
 |---|---|---|
 | `OLLAMA_HOST` | `http://host.docker.internal:11434` | Ollama server URL |
-| `OLLAMA_MODEL` | `llama3` | Model to use (must be pulled in Ollama first) |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Model to use (must be pulled in Ollama first) |
 | `WHISPER_MODEL` | `medium` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 | `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu` |
-| `WHISPER_DTYPE` | `float16` | `float16` (GPU) or `int8` (CPU) |
+| `WHISPER_DTYPE` | `int8` | `int8` (recommended) or `float16` (requires GPU with efficient float16 support) |
 | `KOKORO_VOICE` | `af_sky` | Kokoro voice ID — auto-downloaded on first run |
 | `GPU_CONCURRENCY` | `1` | Max simultaneous GPU tasks (Whisper + TTS share this lock) |
 | `HA_URL` | `http://homeassistant:8123` | Home Assistant URL (container name on bridge network) |
