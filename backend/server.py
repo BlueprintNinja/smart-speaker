@@ -394,9 +394,34 @@ def strip_command_block(text: str) -> str:
     return text.strip()
 
 
+# ── Markdown → plain text for TTS ────────────────────────────────────────────
+def strip_markdown_for_tts(text: str) -> str:
+    """Remove markdown formatting so Kokoro speaks clean natural language."""
+    # Bold/italic: **text**, *text*, __text__, _text_
+    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}([^_]+)_{1,3}', r'\1', text)
+    # Headers: ## Title
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Inline code: `code`
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    # Code blocks: ```...```
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Bullet/list markers: - item, * item, 1. item
+    text = re.sub(r'^[\-\*]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Links: [text](url)
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    # Horizontal rules
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+    # Collapse multiple blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 # ── WAV synthesis helper ───────────────────────────────────────────────────────
 def synth_wav_bytes(text: str) -> tuple[bytes, int]:
     """Synthesize WAV bytes with Kokoro. Returns (wav_bytes, sample_rate)."""
+    text = strip_markdown_for_tts(text)
     pipe = get_kokoro()
     all_audio = []
     for _, _, audio in pipe(text, voice=KOKORO_VOICE, speed=1.0, split_pattern=r'\n+'):
@@ -572,9 +597,10 @@ async def chat(body: dict):
                     tokens2 = await loop.run_in_executor(None, _stream2)
                     full = "".join(tokens2) if tokens2 else trend_summary
 
-                # Strip tool call tags and JSON blocks before displaying
+                # Strip tool call tags, JSON blocks, and markdown before displaying
                 spoken = strip_command_block(full)
                 spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
+                spoken = strip_markdown_for_tts(spoken)
                 for word in re.findall(r'\S+\s*', spoken):
                     yield f"data: {json.dumps({'token': word})}\n\n"
         except Exception as e:
@@ -599,6 +625,7 @@ async def chat(body: dict):
 
         spoken = strip_command_block(full)
         spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
+        spoken = strip_markdown_for_tts(spoken)
         conversation.append({"role": "assistant", "content": spoken})
         yield f"data: {json.dumps({'done': True, 'full': spoken})}\n\n"
 
