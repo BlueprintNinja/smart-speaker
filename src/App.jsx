@@ -286,6 +286,9 @@ export default function App() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const bottomRef = useRef(null);
+  // Silence detection refs for mobile tap-to-toggle
+  const silenceRafRef = useRef(null);
+  const silenceAudioCtxRef = useRef(null);
 
   // Stop/interrupt: cancel fetch + stop audio + reset state
   const stopAll = useCallback(() => {
@@ -615,17 +618,121 @@ export default function App() {
     }
   };
 
+  // Clean up silence detection
+  const stopSilenceMonitor = () => {
+    if (silenceRafRef.current) { cancelAnimationFrame(silenceRafRef.current); silenceRafRef.current = null; }
+    if (silenceAudioCtxRef.current) {
+      try { silenceAudioCtxRef.current.close(); } catch (_) {}
+      silenceAudioCtxRef.current = null;
+    }
+  };
+
   const stopListening = () => {
+    stopSilenceMonitor();
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state === "recording") {
       console.log("[mic] Stopping recorder");
       recorder.stop();
-      // Stop all tracks so mic indicator goes away
       recorder.stream?.getTracks().forEach(t => t.stop());
       setIsRecording(false);
       setOrbState("thinking");
     } else {
       console.log("[mic] stopListening called but recorder state:", recorder?.state, "isRecording:", isRecording);
+    }
+  };
+
+  // Mobile: tap-to-toggle with silence auto-stop
+  const toggleListening = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === "recording") {
+      // Already recording → manual stop
+      console.log("[mic] Manual stop via toggle");
+      stopListening();
+      return;
+    }
+    // Start recording with silence detection
+    startListeningWithSilence();
+  };
+
+  const startListeningWithSilence = async () => {
+    setMicError(null);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setMicError(location.protocol !== 'https:' && location.hostname !== 'localhost'
+        ? 'Mic requires HTTPS. Access via localhost or enable HTTPS.'
+        : 'Microphone not supported in this browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => { console.log("[mic] Data chunk:", e.data.size, "bytes"); audioChunksRef.current.push(e.data); };
+      recorder.onstop = handleAudioStop;
+
+      recorder.start();
+      setIsRecording(true);
+      setOrbState("listening");
+      console.log("[mic] Recording started (toggle mode with silence detection)");
+
+      // Set up silence detection via AnalyserNode
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      silenceAudioCtxRef.current = audioCtx;
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const SILENCE_THRESHOLD = 15; // RMS below this = silence
+      const SILENCE_DURATION = 2000; // ms of silence before auto-stop
+      const SPEECH_GRACE = 1500; // ms after start before silence detection kicks in
+      let silenceStart = null;
+      const recordStart = Date.now();
+
+      const checkSilence = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== "recording") return;
+
+        analyser.getByteTimeDomainData(dataArray);
+        // Calculate RMS
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const v = (dataArray[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / dataArray.length) * 100;
+
+        const elapsed = Date.now() - recordStart;
+        if (elapsed < SPEECH_GRACE) {
+          // Give user time to start speaking
+          silenceRafRef.current = requestAnimationFrame(checkSilence);
+          return;
+        }
+
+        if (rms < SILENCE_THRESHOLD) {
+          if (!silenceStart) silenceStart = Date.now();
+          if (Date.now() - silenceStart > SILENCE_DURATION) {
+            console.log("[mic] Silence detected for", SILENCE_DURATION, "ms — auto-stopping");
+            stopListening();
+            return;
+          }
+        } else {
+          silenceStart = null; // Reset on speech
+        }
+
+        silenceRafRef.current = requestAnimationFrame(checkSilence);
+      };
+      silenceRafRef.current = requestAnimationFrame(checkSilence);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setMicError('Mic permission denied. Allow microphone access in your browser settings.');
+      } else if (err.name === 'NotFoundError') {
+        setMicError('No microphone found. Plug in a mic and try again.');
+      } else {
+        setMicError(`Mic error: ${err.message}`);
+      }
+      setOrbState('idle');
     }
   };
 
@@ -849,20 +956,23 @@ export default function App() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <button
                       className={`mobile-orb ${orbState}`}
-                      {...(loading || orbState === 'thinking'
-                        ? { onClick: (e) => { e.preventDefault(); stopAll(); } }
-                        : { onTouchStart: (e) => { e.preventDefault(); startListening(); }, onTouchEnd: (e) => { e.preventDefault(); stopListening(); }, onMouseDown: startListening, onMouseUp: stopListening }
-                      )}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (loading || orbState === 'thinking') { stopAll(); }
+                        else { toggleListening(); }
+                      }}
                     >
                       {loading || orbState === 'thinking' ? (
                         <div style={{ width: '24%', height: '24%', background: 'white', borderRadius: '3px' }} />
+                      ) : orbState === 'listening' ? (
+                        <div style={{ width: '24%', height: '24%', background: '#f87171', borderRadius: '3px' }} />
                       ) : (
                         <div style={{ width: '28%', height: '28%', border: '2px solid white', borderRadius: '50%' }} />
                       )}
                     </button>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                      <span style={{ fontSize: '0.6rem', color: loading ? '#f87171' : 'var(--navy-400)', fontFamily: 'JetBrains Mono', fontWeight: 'bold' }}>
-                        {loading || orbState === 'thinking' ? 'TAP ■ TO STOP' : orbState === 'listening' ? 'LISTENING...' : 'HOLD ORB TO SPEAK'}
+                      <span style={{ fontSize: '0.6rem', color: orbState === 'listening' ? '#4ade80' : loading ? '#f87171' : 'var(--navy-400)', fontFamily: 'JetBrains Mono', fontWeight: 'bold' }}>
+                        {loading || orbState === 'thinking' ? 'TAP ■ TO STOP' : orbState === 'listening' ? 'LISTENING — TAP TO SEND' : 'TAP ORB TO SPEAK'}
                       </span>
                       <div className="mobile-text-row">
                         <textarea
