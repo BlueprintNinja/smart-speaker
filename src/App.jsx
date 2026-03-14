@@ -295,9 +295,9 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const toastIdRef = useRef(0);
   // Model selector
-  const [availableModels, setAvailableModels] = useState([]);
-  const [activeModel, setActiveModel] = useState("");
-  const [numCtx, setNumCtx] = useState(2048);
+  const [availableModels, setAvailableModels] = useState(["llama3.1:latest", "qwen3.5:latest", "qwen3.5:4b", "qwen2.5:7b"]);
+  const [activeModel, setActiveModel] = useState("qwen3.5:4b");
+  const [numCtx, setNumCtx] = useState(4096);
   // Feature 5: wake word
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const wakeWordRef = useRef(false);
@@ -385,11 +385,11 @@ export default function App() {
     fetch(`${API}/models`)
       .then(r => r.json())
       .then(d => {
-        setAvailableModels(d.models || []);
-        setActiveModel(d.active || "");
+        if (d.models?.length) setAvailableModels(d.models);
+        if (d.active) setActiveModel(d.active);
         if (d.num_ctx) setNumCtx(d.num_ctx);
       })
-      .catch(() => {});
+      .catch(e => console.warn('[models] fetch failed, using defaults:', e));
   }, []);
 
   const switchModel = (model, ctx) => {
