@@ -311,12 +311,15 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
         payload.update(extra)
 
     url = f"{HA_URL}/api/services/{domain}/{service}"
+    print(f"[ha_call] POST {url} payload={payload}", flush=True)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(url, headers=_ha_headers(), json=payload)
             r.raise_for_status()
+            print(f"[ha_call] OK {r.status_code}", flush=True)
             return {"ok": True, "status": r.status_code}
     except httpx.HTTPStatusError as e:
+        print(f"[ha_call] ERROR {e.response.status_code}: {e.response.text}", flush=True)
         return {"error": f"HA returned {e.response.status_code}: {e.response.text}"}
     except Exception as e:
         return {"error": str(e)}
