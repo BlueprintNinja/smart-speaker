@@ -66,6 +66,8 @@ automation:
   - id: sky_timer_auto_off
     alias: "Sky - Timer Auto-Off"
     description: "Turns off the associated canvas device when a Sky timer expires"
+    mode: queued
+    max: 10
     trigger:
       - platform: event
         event_type: timer.finished
