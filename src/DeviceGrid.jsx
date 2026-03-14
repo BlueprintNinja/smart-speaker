@@ -263,13 +263,18 @@ export default function DeviceGrid({ api, lastHaEvent }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
                 <span style={{
                   fontSize: "0.68rem", fontWeight: 600,
-                  color: isOn ? "#4ade80" : state === "off" ? "var(--text-dim)" : "var(--amber-400)",
+                  color: isOn ? "#4ade80" : state === "off" ? "var(--text-dim)" : state === "unavailable" ? "#f87171" : "var(--amber-400)",
                 }}>
                   {state}
                 </span>
-                {ha && (
-                  <span style={{ fontSize: "0.5rem", color: "#4ade80" }}>● HA</span>
-                )}
+                <span style={{
+                  fontSize: "0.48rem", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.3px",
+                  padding: "1px 5px", borderRadius: "3px",
+                  background: ha ? (state === "unavailable" ? "rgba(248,113,113,0.12)" : "rgba(74,222,128,0.12)") : "rgba(251,191,36,0.12)",
+                  color: ha ? (state === "unavailable" ? "#f87171" : "#4ade80") : "#fbbf24",
+                }}>
+                  {ha ? (state === "unavailable" ? "⚠ UNAVAIL" : "✓ SYNCED") : "? NOT FOUND"}
+                </span>
               </div>
             </div>
           );
