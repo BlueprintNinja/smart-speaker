@@ -86,14 +86,18 @@ CRITICAL RULES:
 
 == IRRIGATION & FARM ==
   input_boolean.turn_on / input_boolean.turn_off  — for canvas-managed irrigation zones
-    e.g. "irrigate zone 1" → entity_id: input_boolean.irrigation_zone_1
   switch.turn_on / switch.turn_off  — only if a real physical switch exists in HA
   automation.trigger  — to trigger scheduled irrigation automations
-  For timed irrigation: use input_boolean.turn_on with NO extra fields — confirm duration verbally.
-  e.g. "Turning on irrigation zone 1 for 30 minutes — I'll remind you when to turn it off."
   Soil moisture sensors are read-only (sensor domain) — report their state, do not command them.
   IMPORTANT: Canvas node entity IDs like switch.irrigation_zone_1 are registered as input_boolean.irrigation_zone_1 in HA.
-  Always prefer input_boolean.* for canvas nodes unless the entity list shows a real switch.*.
+  Always use input_boolean.* for canvas irrigation nodes.
+
+  IRRIGATION EXAMPLE: "irrigate zone 1 for 30 minutes" →
+  ```json
+  {"action": "input_boolean.turn_on", "entity_id": "input_boolean.irrigation_zone_1"}
+  ```
+  [TIMER: input_boolean.irrigation_zone_1, 30, input_boolean]
+  Turning on irrigation zone 1 for 30 minutes, Ray — I'll turn it off automatically.
 
 == COVERS / GATES / BLINDS ==
   cover.open_cover, cover.close_cover, cover.stop_cover, cover.toggle
@@ -518,9 +522,11 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
             print(f"[canvas] Rewriting {entity_id} → {real_eid} (config API helper)", flush=True)
             entity_id = real_eid
             domain = "input_boolean"
+            # Skip pre-check — canvas helpers are known entities
+            _skip_cache_check = True
 
     # Pre-check: entity must exist in HA cache (skip check for homeassistant domain)
-    if entity_id and domain != "homeassistant":
+    if entity_id and domain != "homeassistant" and not locals().get("_skip_cache_check"):
         cached = _get_cached_ha_entities()
         known_ids = {e["entity_id"] for e in cached}
         if known_ids and entity_id not in known_ids:
@@ -1095,7 +1101,11 @@ async def chat(body: dict):
         full = f"[LLM error: {e}]"
 
     # ── Execute any embedded HA command ───────────────────────────────────
+    print(f"[chat] RAW LLM output ({len(full)} chars): {full[:500]}", flush=True)
     cmd = extract_ha_command(full)
+    timer_cfg_check = extract_timer(full)
+    print(f"[chat] extract_ha_command → {cmd}", flush=True)
+    print(f"[chat] extract_timer → {timer_cfg_check}", flush=True)
     cmd_entity_id = ""
     if cmd:
         cmd_entity_id = cmd.get("entity_id", "")
@@ -1106,6 +1116,7 @@ async def chat(body: dict):
                 cmd_entity_id,
                 cmd.get("extra") or {},
             )
+            print(f"[chat] ha_call_service({domain}.{service}, {cmd_entity_id}) → {ha_result}", flush=True)
         except Exception as e:
             ha_result = {"error": str(e)}
 
