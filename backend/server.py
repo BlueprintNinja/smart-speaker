@@ -847,6 +847,13 @@ async def _ha_create_timer(slug: str, duration_str: str) -> str | None:
                 data = r2.json()
                 entry_id = data.get("id", "")
                 print(f"[timer] Created {timer_eid} via config API (id={entry_id})", flush=True)
+                # Reload timer integration so the new entity is available for timer.start
+                try:
+                    await client.post(f"{HA_URL}/api/services/timer/reload", headers=_ha_headers(), json={})
+                    await asyncio.sleep(1)  # Give HA time to register the entity
+                    print(f"[timer] Reloaded timer integration", flush=True)
+                except Exception:
+                    pass
                 return entry_id
             else:
                 print(f"[timer] Config API failed for {timer_eid}: {r2.status_code} {r2.text}", flush=True)
@@ -866,8 +873,9 @@ async def _ha_start_timer(slug: str, minutes: float) -> bool:
     timer_eid = f"timer.sky_{slug}"
     hours = int(minutes // 60)
     mins = int(minutes % 60)
-    secs = int((minutes * 60) % 60)
+    secs = int(round((minutes * 60) % 60))
     duration = f"{hours:02d}:{mins:02d}:{secs:02d}"
+    print(f"[timer] Starting {timer_eid} with duration={duration} (from {minutes:.3f}min)", flush=True)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(
@@ -875,8 +883,18 @@ async def _ha_start_timer(slug: str, minutes: float) -> bool:
                 headers=_ha_headers(),
                 json={"entity_id": timer_eid, "duration": duration},
             )
+            print(f"[timer] timer.start response: {r.status_code} body={r.text[:200]}", flush=True)
             if r.status_code == 200:
-                print(f"[timer] Started {timer_eid} for {duration}", flush=True)
+                # Verify it actually started
+                await asyncio.sleep(0.5)
+                r2 = await client.get(f"{HA_URL}/api/states/{timer_eid}", headers=_ha_headers())
+                if r2.status_code == 200:
+                    state = r2.json().get("state", "unknown")
+                    print(f"[timer] {timer_eid} state after start: {state}", flush=True)
+                    if state == "active":
+                        return True
+                    else:
+                        print(f"[timer] WARNING: timer did not become active (state={state})", flush=True)
                 return True
             else:
                 print(f"[timer] Start failed for {timer_eid}: {r.status_code} {r.text}", flush=True)
