@@ -1,0 +1,143 @@
+# Advanced Farm Automations — Ray's Berry Farm
+# These automations demonstrate deeper HA integration patterns.
+# Activate via voice: "Hey Sky, enable the soil moisture auto-irrigation"
+
+automation:
+  # Auto-irrigate when soil moisture drops critically low
+  - id: sky_auto_irrigate_low_moisture
+    alias: "Sky - Auto Irrigate on Low Soil Moisture"
+    description: "Turns on zone 1 irrigation when soil moisture drops below 25%"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.farm_soil_moisture
+        below: 25
+        for:
+          minutes: 5
+    condition:
+      - condition: state
+        entity_id: input_boolean.irrigation_zone_1
+        state: "off"
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.irrigation_zone_1
+      - service: timer.start
+        target:
+          entity_id: timer.sky_irrigation_zone_1
+        data:
+          duration: "00:20:00"
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_soil_moisture"
+          state: "{{ states('sensor.farm_soil_moisture') }}"
+          message: "Soil moisture critically low at {{ states('sensor.farm_soil_moisture') }}%. Auto-started irrigation zone 1 for 20 minutes."
+          severity: "warning"
+
+  # Frost protection — turn on all irrigation when temp drops near freezing
+  - id: sky_frost_protection
+    alias: "Sky - Frost Protection"
+    description: "Activates frost protection scene when temperature approaches freezing"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.farm_soil_temp
+        below: 2
+    condition:
+      - condition: time
+        after: "22:00:00"
+        before: "08:00:00"
+    action:
+      - service: scene.turn_on
+        target:
+          entity_id: scene.frost_protection
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_soil_temp"
+          state: "{{ states('sensor.farm_soil_temp') }}"
+          message: "Temperature at {{ states('sensor.farm_soil_temp') }}°C — activating frost protection. All irrigation zones running."
+          severity: "critical"
+
+  # Dawn lights — turn on barn lights at sunrise
+  - id: sky_dawn_barn_lights
+    alias: "Sky - Dawn Barn Lights"
+    description: "Turns on barn lights 30 minutes before sunrise"
+    trigger:
+      - platform: sun
+        event: sunrise
+        offset: "-00:30:00"
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.light_barn
+      - service: rest_command.sky_alert
+        data:
+          sensor: "input_boolean.light_barn"
+          state: "on"
+          message: "Dawn approaching — barn lights on."
+          severity: "info"
+
+  # Dusk lights off — turn off field lights at sunset + 1hr
+  - id: sky_dusk_field_lights_off
+    alias: "Sky - Dusk Field Lights Off"
+    description: "Turns off field lights 1 hour after sunset"
+    trigger:
+      - platform: sun
+        event: sunset
+        offset: "01:00:00"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.light_field
+      - service: rest_command.sky_alert
+        data:
+          sensor: "input_boolean.light_field"
+          state: "off"
+          message: "Field lights off for the night."
+          severity: "info"
+
+  # High fungal risk alert — notify and log when risk exceeds 70%
+  - id: sky_high_fungal_risk
+    alias: "Sky - High Fungal Risk Alert"
+    description: "Alerts Sky when fungal risk exceeds 70%"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.farm_fungal_risk
+        above: 70
+        for:
+          minutes: 10
+    action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_fungal_risk"
+          state: "{{ states('sensor.farm_fungal_risk') }}"
+          message: "Fungal risk is {{ states('sensor.farm_fungal_risk') }}% — consider a Captan spray if the spray window opens."
+          severity: "warning"
+
+  # Midday irrigation shutoff — safety: turn off all irrigation at 2 PM to prevent overwatering
+  - id: sky_midday_irrigation_check
+    alias: "Sky - Midday Irrigation Safety Shutoff"
+    description: "Ensures all irrigation is off by 2 PM to prevent overwatering"
+    trigger:
+      - platform: time
+        at: "14:00:00"
+    condition:
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: input_boolean.irrigation_zone_1
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.irrigation_zone_2
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.irrigation_zone_3
+            state: "on"
+    action:
+      - service: scene.turn_on
+        target:
+          entity_id: scene.all_irrigation_off
+      - service: rest_command.sky_alert
+        data:
+          sensor: "automation.sky_midday_irrigation_check"
+          state: "triggered"
+          message: "Midday safety check — all irrigation zones turned off to prevent overwatering."
+          severity: "info"

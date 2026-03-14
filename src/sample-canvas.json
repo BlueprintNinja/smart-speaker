@@ -1,0 +1,117 @@
+{
+  "nodes": [
+    {
+      "id": "node_irrigation_1",
+      "type": "irrigation",
+      "x": 120,
+      "y": 100,
+      "config": {
+        "entity_id": "switch.irrigation_zone_1",
+        "friendly_name": "Zone 1",
+        "default_duration": 30
+      }
+    },
+    {
+      "id": "node_irrigation_2",
+      "type": "irrigation",
+      "x": 120,
+      "y": 250,
+      "config": {
+        "entity_id": "switch.irrigation_zone_2",
+        "friendly_name": "Zone 2",
+        "default_duration": 30
+      }
+    },
+    {
+      "id": "node_irrigation_3",
+      "type": "irrigation",
+      "x": 120,
+      "y": 400,
+      "config": {
+        "entity_id": "switch.irrigation_zone_3",
+        "friendly_name": "Zone 3",
+        "default_duration": 20
+      }
+    },
+    {
+      "id": "node_light_barn",
+      "type": "light",
+      "x": 400,
+      "y": 100,
+      "config": {
+        "entity_id": "light.barn_light",
+        "friendly_name": "Barn Light"
+      }
+    },
+    {
+      "id": "node_light_field",
+      "type": "light",
+      "x": 400,
+      "y": 250,
+      "config": {
+        "entity_id": "light.field_light",
+        "friendly_name": "Field Light"
+      }
+    },
+    {
+      "id": "node_tensiometer_1",
+      "type": "tensiometer",
+      "x": 650,
+      "y": 100,
+      "config": {
+        "entity_id": "sensor.tensiometer_field1",
+        "friendly_name": "Field 1 Moisture",
+        "threshold_kpa": 30
+      }
+    },
+    {
+      "id": "node_tensiometer_2",
+      "type": "tensiometer",
+      "x": 650,
+      "y": 250,
+      "config": {
+        "entity_id": "sensor.tensiometer_field2",
+        "friendly_name": "Field 2 Moisture",
+        "threshold_kpa": 30
+      }
+    },
+    {
+      "id": "node_camera_barn",
+      "type": "camera",
+      "x": 400,
+      "y": 400,
+      "config": {
+        "entity_id": "camera.barn_cam",
+        "friendly_name": "Barn Camera"
+      }
+    },
+    {
+      "id": "node_rainpoint",
+      "type": "rainpoint",
+      "x": 650,
+      "y": 400,
+      "config": {
+        "entity_id": "sensor.rainpoint_soil",
+        "friendly_name": "RainPoint BLE"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "node_tensiometer_1",
+      "to": "node_irrigation_1"
+    },
+    {
+      "from": "node_tensiometer_2",
+      "to": "node_irrigation_2"
+    },
+    {
+      "from": "node_rainpoint",
+      "to": "node_irrigation_3"
+    },
+    {
+      "from": "node_camera_barn",
+      "to": "node_light_barn"
+    }
+  ]
+}

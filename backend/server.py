@@ -143,8 +143,42 @@ CRITICAL RULES:
 == NOTIFICATIONS ==
   notify.notify  extra: {"message": "...", "title": "..."}
 
-== GROUPS / ALL DEVICES ==
-  homeassistant.turn_on, homeassistant.turn_off  (works on groups and scenes)
+== GROUPS / ALL DEVICES / AREAS ==
+  homeassistant.turn_on, homeassistant.turn_off  (works on groups, scenes, and areas)
+  To control all devices in an area: use homeassistant.turn_on/turn_off with area_id in extra.
+  Example: "turn off everything in the barn" →
+  ```json
+  {"action": "homeassistant.turn_off", "entity_id": "", "extra": {"area_id": "barn"}}
+  ```
+
+== SCENES ==
+  scene.turn_on  — activate a pre-defined scene
+  Available scenes (from HA ENTITIES list): look for scene.* entities
+  Example: "activate morning routine" →
+  ```json
+  {"action": "scene.turn_on", "entity_id": "scene.farm_morning_routine"}
+  ```
+  Example: "activate frost protection" →
+  ```json
+  {"action": "scene.turn_on", "entity_id": "scene.farm_frost_protection"}
+  ```
+
+== CREATE AUTOMATION TOOL ==
+When the user asks you to CREATE a new automation rule (e.g., "when X happens, do Y"), emit:
+
+[CREATE_AUTOMATION: <name>, <trigger_json>, <action_json>]
+
+Examples:
+- "When soil moisture drops below 20%, start irrigation zone 1" →
+  [CREATE_AUTOMATION: Low Moisture Auto-Irrigate, {"platform":"numeric_state","entity_id":"sensor.farm_soil_moisture","below":20}, {"service":"input_boolean.turn_on","target":{"entity_id":"input_boolean.irrigation_zone_1"}}]
+
+- "Every day at 6am turn on the barn lights" →
+  [CREATE_AUTOMATION: Daily Barn Lights, {"platform":"time","at":"06:00:00"}, {"service":"input_boolean.turn_on","target":{"entity_id":"input_boolean.light_barn"}}]
+
+RULES for CREATE_AUTOMATION:
+- Use valid HA trigger and action JSON format.
+- Confirm what the automation will do verbally.
+- The system will create it in HA via the config API.
 
 If you do NOT know the exact entity_id, make your best guess based on the name the user mentioned
 (e.g. "barn lights" → light.barn_lights) and mention it in your reply so the user can correct it.
@@ -568,12 +602,18 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
             print(f"[ha_call] SKIP — entity not in HA: {entity_id}", flush=True)
             return {"error": f"Entity '{entity_id}' not found in Home Assistant. Check the entity ID or create it in HA first."}
 
-    payload = {"entity_id": entity_id}
+    payload = {}
+    # Area-based commands may have no entity_id — use area_id from extra instead
+    if entity_id:
+        payload["entity_id"] = entity_id
     if extra:
         # Strip fields that HA rejects for simple on/off services
         STRIP_FOR_SIMPLE = {"variables", "duration"}
         if domain in ("switch", "input_boolean", "fan", "lock", "cover") and service in ("turn_on", "turn_off", "toggle"):
             extra = {k: v for k, v in extra.items() if k not in STRIP_FOR_SIMPLE}
+        # area_id goes into the payload directly for homeassistant.turn_on/off
+        if "area_id" in extra:
+            payload["area_id"] = extra.pop("area_id")
         payload.update(extra)
 
     url = f"{HA_URL}/api/services/{domain}/{service}"
@@ -665,6 +705,7 @@ def strip_command_block(text: str) -> str:
     text = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", text)
     text = re.sub(r"\[TIMER:[^\]]+\]", "", text)
     text = re.sub(r"\[FETCH_LOGBOOK:[^\]]+\]", "", text)
+    text = re.sub(r"\[CREATE_AUTOMATION:[^\]]+\]", "", text)
     # Clean up leftover punctuation/whitespace artefacts like trailing ". " or double spaces
     text = re.sub(r"\s{2,}", " ", text)
     text = re.sub(r"\.\s*\.", ".", text)
@@ -681,6 +722,51 @@ def extract_timer(llm_response: str) -> dict | None:
         "minutes": float(match.group(2).strip()),
         "domain": match.group(3).strip(),
     }
+
+
+def extract_create_automation(llm_response: str) -> dict | None:
+    """Parse [CREATE_AUTOMATION: name, trigger_json, action_json] from LLM response."""
+    match = re.search(r"\[CREATE_AUTOMATION:\s*([^,]+),\s*(\{.*?\}),\s*(\{.*?\})\]", llm_response, re.DOTALL)
+    if not match:
+        return None
+    name = match.group(1).strip()
+    try:
+        trigger = json.loads(match.group(2).strip())
+        action = json.loads(match.group(3).strip())
+    except json.JSONDecodeError:
+        return None
+    return {"name": name, "trigger": trigger, "action": action}
+
+
+async def ha_create_automation(name: str, trigger: dict, action: dict) -> dict:
+    """Create an automation in HA via the config API."""
+    if not HA_TOKEN:
+        return {"error": "HA_TOKEN not configured"}
+    slug = re.sub(r"[^a-z0-9_]", "_", name.lower().strip()).strip("_")
+    auto_id = f"sky_voice_{slug}"
+    payload = {
+        "id": auto_id,
+        "alias": f"Sky - {name}",
+        "description": f"Voice-created automation by Sky",
+        "trigger": [trigger],
+        "action": [action],
+        "mode": "single",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{HA_URL}/api/config/automation/config/{auto_id}",
+                headers=_ha_headers(),
+                json=payload,
+            )
+            if r.status_code in (200, 201):
+                print(f"[automation] Created: {auto_id}", flush=True)
+                return {"ok": True, "automation_id": auto_id}
+            else:
+                print(f"[automation] Failed: {r.status_code} {r.text[:200]}", flush=True)
+                return {"error": f"HA returned {r.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 async def _ha_create_timer(slug: str, duration_str: str) -> str | None:
@@ -1193,6 +1279,12 @@ async def chat(body: dict):
                 timer_id = await schedule_timer(timer_cfg["entity_id"], timer_cfg["minutes"], timer_cfg["domain"])
                 timer_info = {"entity_id": timer_cfg["entity_id"], "minutes": timer_cfg["minutes"], "timer_id": timer_id}
 
+            # ── CREATE_AUTOMATION tool ─────────────────────────────────────
+            auto_cfg = extract_create_automation(full) or extract_create_automation(raw_full)
+            if auto_cfg:
+                auto_result = await ha_create_automation(auto_cfg["name"], auto_cfg["trigger"], auto_cfg["action"])
+                print(f"[chat] Created automation: {auto_result}", flush=True)
+
     except Exception as e:
         full = f"[LLM error: {e}]"
 
@@ -1215,6 +1307,59 @@ async def chat(body: dict):
             timer_info = {"entity_id": timer_cfg_from_text["entity_id"], "minutes": timer_cfg_from_text["minutes"], "timer_id": timer_id}
         except Exception as te:
             print(f"[chat] Timer schedule failed: {te}", flush=True)
+    # ── Extraction re-prompt: if the response looks like an action confirmation but
+    #    has no JSON command, ask the LLM a quick focused question to extract it ──
+    if cmd is None and _is_action_request(user_msg):
+        print(f"[chat] Action detected but no JSON — running extraction re-prompt", flush=True)
+        extract_prompt = (
+            "You are a JSON extraction tool. The user asked a smart home assistant to do something, "
+            "and the assistant confirmed the action. Extract the Home Assistant service call as a JSON object.\n\n"
+            "RULES:\n"
+            "- Canvas devices use input_boolean.turn_on / input_boolean.turn_off with input_boolean.{slug} entity IDs.\n"
+            "- Output ONLY a JSON object like: {\"action\": \"input_boolean.turn_on\", \"entity_id\": \"input_boolean.my_light\"}\n"
+            "- If there is also a timed duration, add a TIMER tag after the JSON.\n"
+            "- If no action can be determined, output: NONE\n\n"
+            f"AVAILABLE CANVAS DEVICES:\n"
+        )
+        # Add canvas helpers so the extraction knows valid entity IDs
+        helpers = _load_canvas_helpers()
+        for slug in helpers:
+            extract_prompt += f"  input_boolean.{slug}\n"
+        # Add non-canvas entities from cache
+        for e in _get_cached_ha_entities():
+            eid = e["entity_id"]
+            d = eid.split(".")[0]
+            if d in {"light", "switch", "cover", "lock", "climate", "fan", "scene", "automation", "input_boolean"}:
+                name = (e.get("attributes") or {}).get("friendly_name", "")
+                extract_prompt += f"  {eid} — {name}\n"
+
+        extract_messages = [
+            {"role": "system", "content": extract_prompt},
+            {"role": "user", "content": f"User said: \"{user_msg}\"\nAssistant replied: \"{full}\"\n\nExtract the JSON command:"},
+        ]
+        try:
+            def _extract_stream():
+                return list(_ollama_chat_stream(extract_messages, {"temperature": 0.1, "num_predict": 256}, deep_think=True))
+            extract_tokens = await loop.run_in_executor(None, _extract_stream)
+            if extract_tokens:
+                extract_text = "".join(extract_tokens)
+                print(f"[extract] Re-prompt output: {extract_text[:300]}", flush=True)
+                cmd = extract_ha_command(extract_text)
+                if not timer_cfg_from_text:
+                    timer_cfg_from_text = extract_timer(extract_text)
+                    if timer_cfg_from_text and timer_info is None:
+                        try:
+                            timer_id = await schedule_timer(timer_cfg_from_text["entity_id"], timer_cfg_from_text["minutes"], timer_cfg_from_text["domain"])
+                            timer_info = {"entity_id": timer_cfg_from_text["entity_id"], "minutes": timer_cfg_from_text["minutes"], "timer_id": timer_id}
+                        except Exception:
+                            pass
+                if cmd:
+                    print(f"[extract] Recovered command: {cmd}", flush=True)
+                else:
+                    print(f"[extract] No command extracted from re-prompt", flush=True)
+        except Exception as ex:
+            print(f"[extract] Re-prompt failed: {ex}", flush=True)
+
     cmd_entity_id = ""
     if cmd:
         cmd_entity_id = cmd.get("entity_id", "")

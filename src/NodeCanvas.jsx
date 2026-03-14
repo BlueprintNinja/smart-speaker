@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import sampleCanvas from "./sample-canvas.json";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NODE TYPE DEFINITIONS
@@ -502,9 +503,24 @@ export default function NodeCanvas({ api, lastHaEvent }) {
           })}
 
           {nodes.length === 0 && (
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.25, pointerEvents: "none", flexDirection: "column", gap: "0.5rem" }}>
-              <div style={{ fontSize: "2rem" }}>⬡</div>
-              <div style={{ fontSize: "0.8rem" }}>Drag nodes from the left panel to begin</div>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, flexDirection: "column", gap: "0.75rem" }}>
+              <div style={{ fontSize: "2rem", pointerEvents: "none" }}>⬡</div>
+              <div style={{ fontSize: "0.8rem", pointerEvents: "none" }}>Drag nodes from the left panel to begin</div>
+              <button
+                onClick={() => {
+                  const sNodes = (sampleCanvas.nodes || []).map(n => ({ ...n, config: { ...n.config } }));
+                  const sEdges = (sampleCanvas.connections || []).map((c, i) => ({ id: `edge_sample_${i}`, from: c.from, to: c.to }));
+                  setNodes(sNodes);
+                  setEdges(sEdges);
+                }}
+                style={{
+                  marginTop: "0.5rem", padding: "0.5rem 1.2rem", borderRadius: "6px",
+                  background: "var(--amber-400)", color: "#0b1526", border: "none",
+                  cursor: "pointer", fontWeight: 600, fontSize: "0.75rem", letterSpacing: "0.5px",
+                }}
+              >
+                LOAD SAMPLE CANVAS
+              </button>
             </div>
           )}
         </div>

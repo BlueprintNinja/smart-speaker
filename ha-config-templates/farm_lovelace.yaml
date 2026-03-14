@@ -121,6 +121,41 @@ views:
           - "paused"
           - "idle"
 
+      - type: entity-filter
+        card:
+          type: entities
+          title: Farm Scenes
+          icon: mdi:palette
+        show_empty: false
+        entities:
+          - entity: scene.farm_morning_routine
+          - entity: scene.farm_evening_mode
+          - entity: scene.farm_all_irrigation_on
+          - entity: scene.farm_all_irrigation_off
+          - entity: scene.farm_all_off
+          - entity: scene.farm_frost_protection
+        state_filter:
+          - operator: "!="
+            value: "unavailable"
+
+      - type: entity-filter
+        card:
+          type: entities
+          title: Sky Automations
+          icon: mdi:robot
+        show_empty: false
+        entities:
+          - entity: automation.sky_auto_irrigate_low_moisture
+          - entity: automation.sky_frost_protection
+          - entity: automation.sky_dawn_barn_lights
+          - entity: automation.sky_dusk_field_lights_off
+          - entity: automation.sky_high_fungal_risk
+          - entity: automation.sky_midday_irrigation_check
+          - entity: automation.sky_timer_auto_off
+        state_filter:
+          - "on"
+          - "off"
+
   - title: Sky Assistant
     icon: mdi:robot
     path: sky
@@ -135,6 +170,8 @@ views:
           - **Chat:** http://localhost (Smart Speaker UI)
           - **Memory:** Spray logs, observations, and alerts are persisted
           - **Alerts:** HA automations POST to `/alert` when sensor thresholds trigger
+          - **Scenes:** "activate morning routine", "activate frost protection"
+          - **Automations:** "create an automation to irrigate when moisture drops below 20%"
 
       - type: entities
         title: Farm Bridge Sensors
