@@ -817,14 +817,24 @@ async def chat(body: dict):
     if ha_entities:
         ACTIONABLE_DOMAINS = {"light", "switch", "cover", "lock", "climate", "fan", "scene", "script", "automation", "input_boolean"}
         lines = []
+        canvas_lines = []
         for e in ha_entities:
-            domain = e["entity_id"].split(".")[0]
-            if domain not in ACTIONABLE_DOMAINS:
-                continue
-            name = (e.get("attributes") or {}).get("friendly_name") or e["entity_id"]
+            eid = e["entity_id"]
+            domain = eid.split(".")[0]
+            attrs = e.get("attributes") or {}
+            name = attrs.get("friendly_name") or eid
             state = e.get("state", "")
-            lines.append(f"  {e['entity_id']} — \"{name}\" [{state}]")
-        dynamic_prompt += "\n== YOUR HOME ASSISTANT ENTITIES (use these exact entity_ids) ==\n" + "\n".join(lines)
+            if domain in ACTIONABLE_DOMAINS:
+                lines.append(f"  {eid} — \"{name}\" [{state}]")
+            # Expose canvas nodes so LLM knows the configured entity_ids
+            if eid.startswith("sensor.canvas_") and attrs.get("canvas_node"):
+                cfg_eid = attrs.get("entity_id") or ""
+                dtype = attrs.get("device_type", "")
+                canvas_lines.append(f"  {name} (type={dtype}) → control via: {cfg_eid or eid}")
+        entity_block = "\n== YOUR HOME ASSISTANT ENTITIES (use these exact entity_ids) ==\n" + "\n".join(lines)
+        if canvas_lines:
+            entity_block += "\n\n== CANVAS DEVICES (use the entity_id shown after 'control via:') ==\n" + "\n".join(canvas_lines)
+        dynamic_prompt += entity_block
 
     if mem_summary and mem_summary != "No memory entries yet.":
         dynamic_prompt += f"\n\n== SKY MEMORY (relevant farm history) ==\n{mem_summary}"

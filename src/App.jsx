@@ -179,6 +179,9 @@ export default function App() {
   const [decisions, setDecisions] = useState([]);
   const [outcomeInput, setOutcomeInput] = useState({});
 
+  // Global audio serialization — chain all playback so nothing overlaps
+  const audioChainRef = useRef(Promise.resolve());
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const bottomRef = useRef(null);
@@ -214,12 +217,7 @@ export default function App() {
             localStorage.setItem("sky_digest_day", today);
             // Auto-play digest audio if available
             if (d.audio_b64) {
-              const bytes = Uint8Array.from(atob(d.audio_b64), c => c.charCodeAt(0));
-              const blob = new Blob([bytes], { type: "audio/wav" });
-              const url = URL.createObjectURL(blob);
-              const audio = new Audio(url);
-              audio.play().catch(() => {});
-              audio.onended = () => URL.revokeObjectURL(url);
+              playAudioB64(d.audio_b64);
             }
           }
           digestShownRef.current = true;
@@ -249,12 +247,7 @@ export default function App() {
           // Play audio if present
           if (alert.audio_b64) {
             try {
-              const bytes = Uint8Array.from(atob(alert.audio_b64), c => c.charCodeAt(0));
-              const blob = new Blob([bytes], { type: "audio/wav" });
-              const url = URL.createObjectURL(blob);
-              const audio = new Audio(url);
-              audio.play().catch(() => {});
-              audio.onended = () => URL.revokeObjectURL(url);
+              playAudioB64(alert.audio_b64);
             } catch (_) {}
           }
           // Show in chat
@@ -561,27 +554,49 @@ export default function App() {
     }
   };
 
+  // Play a blob URL and return a promise that resolves when audio finishes
+  const _playUrl = (url) => new Promise((resolve) => {
+    const audio = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+    audio.play().catch(() => resolve());
+  });
+
+  // Speak text via /tts_audio — serialized so nothing overlaps
   const playTTS = (text) => {
-    return new Promise(async (resolve) => {
+    const job = audioChainRef.current.then(async () => {
       try {
         const res = await fetch(`${API}/tts_audio`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
         });
-        if (!res.ok) { resolve(); return; }
-
+        if (!res.ok) return;
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        await audio.play();
+        await _playUrl(url);
       } catch (err) {
         console.error("TTS playback error", err);
-        resolve();
       }
     });
+    audioChainRef.current = job;
+    return job;
+  };
+
+  // Play raw base64 audio — also serialized
+  const playAudioB64 = (b64, mime = "audio/wav") => {
+    const job = audioChainRef.current.then(async () => {
+      try {
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const blob = new Blob([bytes], { type: mime });
+        const url = URL.createObjectURL(blob);
+        await _playUrl(url);
+      } catch (err) {
+        console.error("Audio playback error", err);
+      }
+    });
+    audioChainRef.current = job;
+    return job;
   };
 
   const handleKey = (e) => {
@@ -663,10 +678,7 @@ export default function App() {
                 <div style={{ fontSize: '0.6rem', color: 'var(--amber-400)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>Morning Briefing · {digest.date}</div>
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-bright)', lineHeight: '1.5' }}>{digest.text}</div>
                 <button onClick={() => { if (digest.audio_b64) {
-                  const bytes = Uint8Array.from(atob(digest.audio_b64), c => c.charCodeAt(0));
-                  const blob = new Blob([bytes], { type: 'audio/wav' });
-                  const url = URL.createObjectURL(blob);
-                  const a = new Audio(url); a.play().catch(()=>{}); a.onended = () => URL.revokeObjectURL(url);
+                  playAudioB64(digest.audio_b64);
                 } else { playTTS(digest.text); }}}
                   style={{ marginTop: '0.4rem', background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)',
                     fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer' }}>▶ REPLAY</button>
