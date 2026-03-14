@@ -106,7 +106,7 @@ views:
       - type: entity-filter
         card:
           type: entities
-          title: Active Timers
+          title: Sky Timers
           icon: mdi:timer-outline
         show_empty: false
         entities:
@@ -115,9 +115,11 @@ views:
           - entity: timer.sky_irrigation_zone_3
           - entity: timer.sky_light_barn
           - entity: timer.sky_light_field
+          - entity: timer.sky_init
         state_filter:
           - "active"
           - "paused"
+          - "idle"
 
   - title: Sky Assistant
     icon: mdi:robot

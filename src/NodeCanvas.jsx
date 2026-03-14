@@ -153,6 +153,11 @@ const canvasStyles = `
   100% { box-shadow: 0 0 0 0 rgba(74,222,128,0), 0 4px 20px rgba(0,0,0,0.5); }
 }
 .node-pulse { animation: nodePulse 0.6s ease-out 3; }
+.node-active {
+  box-shadow: 0 0 8px 2px rgba(74,222,128,0.5), 0 4px 20px rgba(0,0,0,0.5);
+  border-color: #4ade80 !important;
+}
+.node-active .node-header { background: rgba(74,222,128,0.1) !important; }
 
 .ha-panel {
   width: 240px; flex-shrink: 0; background: rgba(6,13,26,0.9);
@@ -239,7 +244,7 @@ export default function NodeCanvas({ api, lastHaEvent }) {
       } catch (e) { /* silent */ }
     };
     fetchStates();
-    const id = setInterval(fetchStates, 15000);
+    const id = setInterval(fetchStates, 5000);
     return () => clearInterval(id);
   }, [nodes, api]);
 
@@ -426,10 +431,14 @@ export default function NodeCanvas({ api, lastHaEvent }) {
           {/* Nodes */}
           {nodes.map(node => {
             const def = NODE_TYPES[node.type];
+            const cfgEid = node.config.entity_id || "";
+            const nodeSlug = cfgEid.includes(".") ? cfgEid.split(".").slice(1).join(".") : cfgEid;
+            const nodeHaEntity = haStates[cfgEid] || haStates[`input_boolean.${nodeSlug}`];
+            const isActive = nodeHaEntity?.state === "on";
             return (
               <div
                 key={node.id}
-                className={`canvas-node${selected === node.id ? " selected" : ""}${pulsingNode === node.id ? " node-pulse" : ""}`}
+                className={`canvas-node${selected === node.id ? " selected" : ""}${pulsingNode === node.id ? " node-pulse" : ""}${isActive ? " node-active" : ""}`}
                 style={{ left: node.x, top: node.y }}
                 onMouseDown={e => onNodeMouseDown(e, node.id)}
               >
