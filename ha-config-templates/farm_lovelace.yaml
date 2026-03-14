@@ -240,7 +240,7 @@ views:
           She monitors all farm sensors, responds to voice commands,
           and speaks proactive alerts when thresholds are crossed.
 
-          - **Chat:** http://localhost (Smart Speaker UI)
+          - **Chat:** https://192.168.254.131 (Smart Speaker UI)
           - **Memory:** Spray logs, observations, and alerts are persisted
           - **Alerts:** HA automations POST to `/alert` when sensor thresholds trigger
           - **Scenes:** "activate morning routine", "activate frost protection"
