@@ -457,6 +457,15 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
     if not HA_TOKEN:
         return {"error": "HA_TOKEN not configured"}
 
+    # Canvas virtual entities — handle directly via states API
+    if entity_id and _is_canvas_entity(entity_id):
+        if service in ("turn_on", "toggle"):
+            return await _canvas_set_state(entity_id, "on")
+        elif service == "turn_off":
+            return await _canvas_set_state(entity_id, "off")
+        else:
+            return await _canvas_set_state(entity_id, service)
+
     # Pre-check: entity must exist in HA cache (skip check for homeassistant domain)
     if entity_id and domain != "homeassistant":
         cached = _get_cached_ha_entities()
@@ -1666,46 +1675,68 @@ def _save_canvas_helpers(data: dict):
     CANVAS_HELPERS_PATH.write_text(json.dumps(data, indent=2))
 
 
-async def _ha_create_input_boolean(client, slug: str, name: str, icon: str) -> str | None:
-    """Create an input_boolean helper in HA. Returns the config entry ID or None."""
+async def _ha_create_canvas_entity(client, slug: str, name: str, icon: str) -> bool:
+    """Create an input_boolean entity in HA via the states API (always works)."""
+    eid = f"input_boolean.{slug}"
+    payload = {
+        "state": "off",
+        "attributes": {
+            "friendly_name": name,
+            "icon": icon,
+            "canvas_virtual": True,
+        }
+    }
     try:
-        r = await client.post(
-            f"{HA_URL}/api/config/input_boolean/config",
-            headers=_ha_headers(),
-            json={"name": name, "icon": icon},
-        )
+        r = await client.post(f"{HA_URL}/api/states/{eid}", headers=_ha_headers(), json=payload)
         if r.status_code in (200, 201):
-            data = r.json()
-            entry_id = data.get("id", "")
-            print(f"[canvas_sync] Created input_boolean.{slug} (config_id={entry_id})", flush=True)
-            return entry_id
-        else:
-            print(f"[canvas_sync] input_boolean create failed for {slug}: {r.status_code} {r.text}", flush=True)
-    except Exception as e:
-        print(f"[canvas_sync] input_boolean create error for {slug}: {e}", flush=True)
-    return None
-
-
-async def _ha_delete_input_boolean(client, slug: str, config_id: str) -> bool:
-    """Delete an input_boolean helper from HA by its config entry ID."""
-    try:
-        r = await client.delete(
-            f"{HA_URL}/api/config/input_boolean/config/{config_id}",
-            headers=_ha_headers(),
-        )
-        if r.status_code in (200, 204):
-            print(f"[canvas_sync] Deleted input_boolean.{slug} (config_id={config_id})", flush=True)
+            print(f"[canvas_sync] Created {eid} via states API", flush=True)
             return True
         else:
-            print(f"[canvas_sync] input_boolean delete failed for {slug}: {r.status_code} {r.text}", flush=True)
+            print(f"[canvas_sync] states API create failed for {eid}: {r.status_code} {r.text}", flush=True)
     except Exception as e:
-        print(f"[canvas_sync] input_boolean delete error for {slug}: {e}", flush=True)
-    # Fallback: try to remove the state entry so it doesn't linger
-    try:
-        await client.delete(f"{HA_URL}/api/states/input_boolean.{slug}", headers=_ha_headers())
-    except Exception:
-        pass
+        print(f"[canvas_sync] states API create error for {eid}: {e}", flush=True)
     return False
+
+
+async def _ha_delete_canvas_entity(client, slug: str) -> bool:
+    """Delete a canvas-created input_boolean from HA."""
+    eid = f"input_boolean.{slug}"
+    try:
+        r = await client.delete(f"{HA_URL}/api/states/{eid}", headers=_ha_headers())
+        if r.status_code in (200, 204):
+            print(f"[canvas_sync] Deleted {eid}", flush=True)
+            return True
+        else:
+            print(f"[canvas_sync] delete failed for {eid}: {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"[canvas_sync] delete error for {eid}: {e}", flush=True)
+    return False
+
+
+def _is_canvas_entity(entity_id: str) -> bool:
+    """Check if an entity_id belongs to a canvas-managed virtual device."""
+    helpers = _load_canvas_helpers()
+    slug = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
+    return slug in helpers
+
+
+async def _canvas_set_state(entity_id: str, state: str) -> dict:
+    """Directly set the state of a canvas virtual entity via HA states API."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Get current attributes so we preserve them
+            r = await client.get(f"{HA_URL}/api/states/{entity_id}", headers=_ha_headers())
+            attrs = {}
+            if r.status_code == 200:
+                attrs = r.json().get("attributes", {})
+            payload = {"state": state, "attributes": attrs}
+            r2 = await client.post(f"{HA_URL}/api/states/{entity_id}", headers=_ha_headers(), json=payload)
+            if r2.status_code in (200, 201):
+                print(f"[canvas] Set {entity_id} → {state}", flush=True)
+                return {"ok": True, "state": state}
+            return {"error": f"HA returned {r2.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/canvas/sync")
@@ -1754,43 +1785,25 @@ async def canvas_sync(body: dict):
         # ── 1. Delete helpers for removed nodes ──────────────────────────────
         removed_slugs = set(helpers.keys()) - set(current_slugs.keys())
         for slug in removed_slugs:
-            config_id = helpers.pop(slug, None)
-            if config_id:
-                ok = await _ha_delete_input_boolean(client, slug, config_id)
-                if ok:
-                    deleted += 1
+            helpers.pop(slug, None)
+            ok = await _ha_delete_canvas_entity(client, slug)
+            if ok:
+                deleted += 1
             # Also clean up the sensor.canvas_* state entry
             try:
                 await client.delete(f"{HA_URL}/api/states/sensor.canvas_{slug}", headers=_ha_headers())
             except Exception:
                 pass
 
-        # ── 2. Create helpers for new actionable nodes ───────────────────────
+        # ── 2. Create virtual entities for new actionable nodes ──────────────
         for slug, info in current_slugs.items():
             if slug not in helpers:
-                # Check if it already exists (user may have created manually)
-                state_r = await client.get(f"{HA_URL}/api/states/input_boolean.{slug}", headers=_ha_headers())
-                if state_r.status_code in (200,):
-                    print(f"[canvas_sync] input_boolean.{slug} already exists in HA", flush=True)
-                    # Try to find its config ID so we can manage it later
-                    try:
-                        list_r = await client.get(f"{HA_URL}/api/config/input_boolean/config", headers=_ha_headers())
-                        if list_r.status_code == 200:
-                            for entry in list_r.json():
-                                if entry.get("id", "").endswith(slug) or entry.get("name", "").lower().replace(" ", "_") == slug:
-                                    helpers[slug] = entry["id"]
-                                    break
-                    except Exception:
-                        pass
-                    if slug not in helpers:
-                        helpers[slug] = f"external_{slug}"
+                ok = await _ha_create_canvas_entity(client, slug, info["name"], info["icon"])
+                if ok:
+                    helpers[slug] = "canvas"
+                    created += 1
                 else:
-                    config_id = await _ha_create_input_boolean(client, slug, info["name"], info["icon"])
-                    if config_id:
-                        helpers[slug] = config_id
-                        created += 1
-                    else:
-                        errors.append(f"input_boolean.{slug}: creation failed")
+                    errors.append(f"input_boolean.{slug}: creation failed")
 
         # ── 3. Push sensor.canvas_* placeholders for ALL nodes ───────────────
         for node in nodes:
