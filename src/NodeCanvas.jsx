@@ -147,6 +147,13 @@ const canvasStyles = `
 }
 .node-delete:hover { color: #f87171; }
 
+@keyframes nodePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(74,222,128,0.8), 0 4px 20px rgba(0,0,0,0.5); }
+  50%  { box-shadow: 0 0 0 8px rgba(74,222,128,0), 0 4px 20px rgba(0,0,0,0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(74,222,128,0), 0 4px 20px rgba(0,0,0,0.5); }
+}
+.node-pulse { animation: nodePulse 0.6s ease-out 3; }
+
 .ha-panel {
   width: 240px; flex-shrink: 0; background: rgba(6,13,26,0.9);
   border-left: 1px solid var(--navy-700); display: flex; flex-direction: column;
@@ -204,6 +211,7 @@ export default function NodeCanvas({ api, lastHaEvent }) {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [haStates, setHaStates] = useState({});    // entity_id -> { state, attributes }
   const [chatHighlight, setChatHighlight] = useState(null); // entity_id triggered from chat
+  const [pulsingNode, setPulsingNode] = useState(null); // node.id currently pulsing
   const canvasRef = useRef(null);
 
   // ── Persist canvas to localStorage + sync to HA ─────────────────────────────
@@ -235,13 +243,17 @@ export default function NodeCanvas({ api, lastHaEvent }) {
     return () => clearInterval(id);
   }, [nodes, api]);
 
-  // ── Highlight nodes triggered by main chat commands ──────────────────────────
+  // ── Pulse node when a chat command fires on its entity ──────────────────────
   useEffect(() => {
-    if (!lastHaEvent) return;
-    const entity = lastHaEvent.entity_id || (lastHaEvent.result || {}).entity_id;
-    if (entity) {
-      setChatHighlight(entity);
-      setTimeout(() => setChatHighlight(null), 3000);
+    if (!lastHaEvent?.entity_id) return;
+    const entityId = lastHaEvent.entity_id;
+    const match = nodes.find(n =>
+      n.config.entity_id === entityId ||
+      resolveEntityId(n) === entityId
+    );
+    if (match) {
+      setPulsingNode(match.id);
+      setTimeout(() => setPulsingNode(null), 2000);
     }
   }, [lastHaEvent]);
 
@@ -415,13 +427,8 @@ export default function NodeCanvas({ api, lastHaEvent }) {
             return (
               <div
                 key={node.id}
-                className={`canvas-node${selected === node.id ? " selected" : ""}`}
-                style={{
-                  left: node.x, top: node.y,
-                  ...(chatHighlight && node.config.entity_id === chatHighlight
-                    ? { boxShadow: "0 0 0 2px #4ade80, 0 0 20px rgba(74,222,128,0.4)", borderColor: "#4ade80" }
-                    : {}),
-                }}
+                className={`canvas-node${selected === node.id ? " selected" : ""}${pulsingNode === node.id ? " node-pulse" : ""}`}
+                style={{ left: node.x, top: node.y }}
                 onMouseDown={e => onNodeMouseDown(e, node.id)}
               >
                 {/* Input port */}

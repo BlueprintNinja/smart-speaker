@@ -359,11 +359,33 @@ export default function App() {
   };
 
   // ── Chat & TTS ──────────────────────────────────────────────────────────────
+  const ttsQueueRef = useRef([]);
+  const ttsPlayingRef = useRef(false);
+
+  const enqueueTTS = (text) => {
+    const clean = text.trim();
+    if (!clean) return;
+    ttsQueueRef.current.push(clean);
+    if (!ttsPlayingRef.current) drainTTSQueue();
+  };
+
+  const drainTTSQueue = async () => {
+    if (ttsPlayingRef.current) return;
+    while (ttsQueueRef.current.length > 0) {
+      const sentence = ttsQueueRef.current.shift();
+      ttsPlayingRef.current = true;
+      await playTTS(sentence);
+      ttsPlayingRef.current = false;
+    }
+  };
+
   const sendText = async (text) => {
     if (!text.trim()) return;
     setLoading(true);
     setOrbState("thinking");
-    
+    ttsQueueRef.current = [];
+    ttsPlayingRef.current = false;
+
     const newMsg = { role: "user", text };
     setMessages(prev => [...prev, newMsg]);
     setInput("");
@@ -379,6 +401,8 @@ export default function App() {
       const decoder = new TextDecoder();
       let botText = "";
       let buf = "";
+      let sentenceBuf = "";  // accumulates tokens until a sentence boundary
+      let ttsStarted = false;
 
       // Add initial empty bot message
       setMessages(prev => [...prev, { role: "bot", text: "", sources: [] }]);
@@ -389,7 +413,7 @@ export default function App() {
 
         buf += decoder.decode(value, { stream: true });
         const lines = buf.split("\n");
-        buf = lines.pop(); // keep incomplete last line in buffer
+        buf = lines.pop();
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -397,12 +421,23 @@ export default function App() {
             const data = JSON.parse(line.slice(6));
             if (data.token) {
               botText += data.token;
+              sentenceBuf += data.token;
               updateLastBotMessage(botText, null, null);
+              // Fire TTS on sentence boundaries (.  !  ?  followed by space or end)
+              const boundaryMatch = sentenceBuf.match(/^(.+?[.!?])\s/);
+              if (boundaryMatch) {
+                const sentence = boundaryMatch[1];
+                sentenceBuf = sentenceBuf.slice(boundaryMatch[0].length);
+                ttsStarted = true;
+                enqueueTTS(sentence);
+              }
             } else if (data.event === "ha_result") {
               updateLastBotMessage(null, null, data.result);
-              setLastHaEvent(data.result);
+              setLastHaEvent({ ...data.result, entity_id: data.entity_id });
             } else if (data.done) {
-              playTTS(data.full);
+              // Flush any remaining sentence buffer
+              if (sentenceBuf.trim()) enqueueTTS(sentenceBuf.trim());
+              else if (!ttsStarted) enqueueTTS(data.full);
             }
           } catch (e) { /* malformed line */ }
         }

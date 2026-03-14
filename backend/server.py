@@ -625,7 +625,7 @@ async def chat(body: dict):
             except Exception as e:
                 ha_result = {"error": str(e)}
 
-            yield f"data: {json.dumps({'event': 'ha_result', 'result': ha_result})}\n\n"
+            yield f"data: {json.dumps({'event': 'ha_result', 'result': ha_result, 'entity_id': cmd.get('entity_id', '')})}\n\n"
 
         spoken = strip_command_block(full)
         spoken = re.sub(r"\[FETCH_TREND:[^\]]+\]", "", spoken).strip()
