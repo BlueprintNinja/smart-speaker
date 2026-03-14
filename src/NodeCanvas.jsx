@@ -147,48 +147,22 @@ const canvasStyles = `
 }
 .node-delete:hover { color: #f87171; }
 
-.test-panel {
-  width: 280px; flex-shrink: 0; background: rgba(6,13,26,0.9);
+.ha-panel {
+  width: 240px; flex-shrink: 0; background: rgba(6,13,26,0.9);
   border-left: 1px solid var(--navy-700); display: flex; flex-direction: column;
 }
-.test-panel-header {
+.ha-panel-header {
   padding: 1rem; border-bottom: 1px solid var(--navy-700);
-  font-size: 0.8rem; font-weight: 600; color: var(--amber-400); letter-spacing: 1px;
+  font-size: 0.75rem; font-weight: 600; color: var(--amber-400); letter-spacing: 1px;
 }
-.test-panel-body { flex: 1; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; overflow-y: auto; }
-.test-input {
-  background: var(--navy-800); border: 1px solid var(--navy-700);
-  color: white; border-radius: 6px; padding: 0.5rem; font-family: inherit;
-  font-size: 0.8rem; resize: none; outline: none; width: 100%;
+.ha-panel-body { flex: 1; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; }
+.ha-entity-row {
+  background: var(--navy-800); border: 1px solid var(--navy-700); border-radius: 6px;
+  padding: 0.5rem 0.6rem; display: flex; flex-direction: column; gap: 0.15rem;
 }
-.test-input:focus { border-color: var(--amber-500); }
-.test-run-btn {
-  background: var(--amber-500); border: none; color: var(--navy-950);
-  font-weight: 700; font-size: 0.8rem; padding: 0.5rem; border-radius: 6px;
-  cursor: pointer; letter-spacing: 0.5px;
-}
-.test-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.test-result {
-  background: var(--navy-800); border: 1px solid var(--navy-700);
-  border-radius: 6px; padding: 0.75rem; font-family: 'JetBrains Mono', monospace;
-  font-size: 0.68rem; line-height: 1.6; white-space: pre-wrap; overflow-x: auto;
-  flex: 1;
-}
-.test-result.ok   { border-color: #166534; color: #4ade80; }
-.test-result.err  { border-color: #7f1d1d; color: #f87171; }
-.test-node-select {
-  background: var(--navy-800); border: 1px solid var(--navy-700);
-  color: var(--text-bright); border-radius: 6px; padding: 0.4rem 0.5rem;
-  font-size: 0.78rem; width: 100%; outline: none; cursor: pointer;
-}
-.test-label { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-.test-action-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.test-action-chip {
-  padding: 3px 10px; border-radius: 20px; font-size: 0.68rem; cursor: pointer;
-  border: 1px solid var(--navy-600); background: var(--navy-800); color: var(--text-dim);
-  transition: all 0.15s;
-}
-.test-action-chip.selected { background: var(--amber-500); border-color: var(--amber-500); color: var(--navy-950); font-weight: 600; }
+.ha-entity-id { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--navy-400); }
+.ha-entity-state { font-size: 0.72rem; font-weight: 600; }
+.ha-entity-name { font-size: 0.65rem; color: var(--text-dim); }
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,11 +202,7 @@ export default function NodeCanvas({ api, lastHaEvent }) {
   const [dragging, setDragging] = useState(null);  // { nodeId, offX, offY }
   const [wiring, setWiring] = useState(null);      // { fromNode, fromPort:{x,y} }
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const [testCmd, setTestCmd] = useState("");
-  const [testNode, setTestNode] = useState("");
-  const [testAction, setTestAction] = useState("");
-  const [testResult, setTestResult] = useState(null);
-  const [testing, setTesting] = useState(false);
+  const [haStates, setHaStates] = useState({});    // entity_id -> { state, attributes }
   const [chatHighlight, setChatHighlight] = useState(null); // entity_id triggered from chat
   const canvasRef = useRef(null);
 
@@ -247,6 +217,23 @@ export default function NodeCanvas({ api, lastHaEvent }) {
       }).catch(() => {});
     }
   }, [nodes, edges]);
+
+  // ── Poll HA states for all canvas nodes ────────────────────────────────────
+  useEffect(() => {
+    const fetchStates = async () => {
+      if (!api || nodes.length === 0) return;
+      try {
+        const r = await fetch(`${api}/ha/entities`);
+        const data = await r.json();
+        const map = {};
+        for (const e of (data.entities || [])) map[e.entity_id] = e;
+        setHaStates(map);
+      } catch (e) { /* silent */ }
+    };
+    fetchStates();
+    const id = setInterval(fetchStates, 15000);
+    return () => clearInterval(id);
+  }, [nodes, api]);
 
   // ── Highlight nodes triggered by main chat commands ──────────────────────────
   useEffect(() => {
@@ -345,40 +332,12 @@ export default function NodeCanvas({ api, lastHaEvent }) {
     };
   };
 
-  // ── Test a voice command against selected node ──────────────────────────────
-  const runTest = async () => {
-    if (!testNode && !testCmd.trim()) return;
-    setTesting(true);
-    setTestResult(null);
-
-    const node = nodes.find(n => n.id === testNode);
-    const payload = {
-      command: testCmd,
-      node: node ? { type: node.type, config: node.config, action: testAction } : null,
-      nodes: nodes.map(n => ({ id: n.id, type: n.type, config: n.config })),
-      edges,
-    };
-
-    try {
-      const res = await fetch(`${api}/test_command`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      setTestResult({ ok: res.ok, data });
-    } catch (err) {
-      setTestResult({ ok: false, data: { error: err.message } });
-    } finally {
-      setTesting(false);
-    }
+  // ── Resolve entity_id for a canvas node ──────────────────────────────────────
+  const resolveEntityId = (node) => {
+    const raw = node.config.entity_id || `canvas_${node.id}`;
+    if (raw.includes(".")) return raw;
+    return `sensor.canvas_${raw}`;
   };
-
-  const selectedNodeType = nodes.find(n => n.id === testNode)?.type;
-
-  useEffect(() => {
-    setTestAction("");
-  }, [testNode]);
 
   return (
     <>
@@ -403,7 +362,7 @@ export default function NodeCanvas({ api, lastHaEvent }) {
             <div style={{ fontSize: "0.65rem", color: "var(--text-dim)", lineHeight: 1.6 }}>
               Drag nodes onto canvas.<br />
               Connect output → input ports.<br />
-              Test voice commands in the right panel.
+              Nodes sync to HA automatically.
             </div>
           </div>
         </div>
@@ -521,72 +480,43 @@ export default function NodeCanvas({ api, lastHaEvent }) {
           )}
         </div>
 
-        {/* ── Test Panel ── */}
-        <div className="test-panel">
-          <div className="test-panel-header">⚡ COMMAND TESTER</div>
-          <div className="test-panel-body">
-
-            <div>
-              <div className="test-label" style={{ marginBottom: "0.35rem" }}>Target Node</div>
-              <select
-                className="test-node-select"
-                value={testNode}
-                onChange={e => setTestNode(e.target.value)}
-              >
-                <option value="">— All nodes —</option>
-                {nodes.map(n => (
-                  <option key={n.id} value={n.id}>
-                    {NODE_TYPES[n.type].icon} {n.config.friendly_name || n.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {selectedNodeType && (
-              <div>
-                <div className="test-label" style={{ marginBottom: "0.35rem" }}>Action</div>
-                <div className="test-action-chips">
-                  {NODE_TYPES[selectedNodeType].actions.map(a => (
-                    <div
-                      key={a}
-                      className={`test-action-chip${testAction === a ? " selected" : ""}`}
-                      onClick={() => setTestAction(a === testAction ? "" : a)}
-                    >
-                      {a}
-                    </div>
-                  ))}
+        {/* ── HA Entity Status Panel ── */}
+        <div className="ha-panel">
+          <div className="ha-panel-header">⊞ HA ENTITIES</div>
+          <div className="ha-panel-body">
+            {nodes.length === 0 && (
+              <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", fontStyle: "italic" }}>
+                Add nodes to the canvas — they will appear as real HA entities automatically.
+              </div>
+            )}
+            {nodes.map(node => {
+              const def = NODE_TYPES[node.type];
+              const entityId = resolveEntityId(node);
+              const haEntity = haStates[entityId] || haStates[node.config.entity_id];
+              const state = haEntity?.state ?? "—";
+              const isOn = state === "on" || state === "open" || state === "unlocked";
+              const isOff = state === "off" || state === "closed" || state === "locked";
+              const stateColor = isOn ? "#4ade80" : isOff ? "var(--text-dim)" : "var(--amber-400)";
+              return (
+                <div key={node.id} className="ha-entity-row" style={{ borderLeft: `3px solid ${def.color}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <span>{def.icon}</span>
+                    <span className="ha-entity-name">{node.config.friendly_name || node.id}</span>
+                    <span className="ha-entity-state" style={{ marginLeft: "auto", color: stateColor }}>{state}</span>
+                  </div>
+                  <div className="ha-entity-id">{entityId}</div>
+                  {haEntity && (
+                    <div style={{ fontSize: "0.6rem", color: "#4ade80", marginTop: "0.1rem" }}>✓ in HA</div>
+                  )}
+                  {!haEntity && (
+                    <div style={{ fontSize: "0.6rem", color: "var(--text-dim)", marginTop: "0.1rem" }}>syncing…</div>
+                  )}
                 </div>
-              </div>
-            )}
-
-            <div>
-              <div className="test-label" style={{ marginBottom: "0.35rem" }}>Voice Command</div>
-              <textarea
-                className="test-input"
-                rows={3}
-                placeholder={"e.g. Turn on the barn lights\ne.g. Check field 1 moisture\ne.g. Open irrigation zone 2"}
-                value={testCmd}
-                onChange={e => setTestCmd(e.target.value)}
-              />
-            </div>
-
-            <button
-              className="test-run-btn"
-              onClick={runTest}
-              disabled={testing || (!testCmd.trim() && !testNode)}
-            >
-              {testing ? "RUNNING..." : "▶ RUN TEST"}
-            </button>
-
-            {testResult && (
-              <div className={`test-result ${testResult.ok ? "ok" : "err"}`}>
-                {JSON.stringify(testResult.data, null, 2)}
-              </div>
-            )}
-
+              );
+            })}
             {edges.length > 0 && (
               <div style={{ marginTop: "auto", paddingTop: "0.75rem", borderTop: "1px solid var(--navy-700)" }}>
-                <div className="test-label" style={{ marginBottom: "0.4rem" }}>Connections ({edges.length})</div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "0.4rem" }}>Connections ({edges.length})</div>
                 {edges.map(e => {
                   const from = nodes.find(n => n.id === e.from);
                   const to   = nodes.find(n => n.id === e.to);
@@ -595,10 +525,8 @@ export default function NodeCanvas({ api, lastHaEvent }) {
                       <span style={{ color: NODE_TYPES[from?.type]?.color }}>{from?.config.friendly_name || e.from}</span>
                       <span>→</span>
                       <span style={{ color: NODE_TYPES[to?.type]?.color }}>{to?.config.friendly_name || e.to}</span>
-                      <span
-                        style={{ marginLeft: "auto", cursor: "pointer", color: "#f87171" }}
-                        onClick={() => setEdges(prev => prev.filter(eg => eg.id !== e.id))}
-                      >✕</span>
+                      <span style={{ marginLeft: "auto", cursor: "pointer", color: "#f87171" }}
+                        onClick={() => setEdges(prev => prev.filter(eg => eg.id !== e.id))}>✕</span>
                     </div>
                   );
                 })}
