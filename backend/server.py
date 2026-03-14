@@ -193,14 +193,21 @@ def get_kokoro():
 def _ollama_chat_stream(messages: list[dict], options: dict):
     url = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
     payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": True, "options": options}
-    with requests.post(url, json=payload, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        for line in r.iter_lines():
-            if line:
-                chunk = json.loads(line.decode("utf-8"))
-                content = (chunk.get("message") or {}).get("content", "")
-                if content:
-                    yield content
+    print(f"[ollama] POST {url} model={OLLAMA_MODEL}", flush=True)
+    try:
+        with requests.post(url, json=payload, stream=True, timeout=120) as r:
+            print(f"[ollama] HTTP {r.status_code}", flush=True)
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if line:
+                    chunk = json.loads(line.decode("utf-8"))
+                    content = (chunk.get("message") or {}).get("content", "")
+                    if content:
+                        yield content
+            print("[ollama] stream done", flush=True)
+    except Exception as e:
+        print(f"[ollama] ERROR: {e}", flush=True)
+        raise
 
 
 # ── Conversation history ───────────────────────────────────────────────────────
