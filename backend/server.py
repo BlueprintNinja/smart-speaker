@@ -38,6 +38,7 @@ _ollama_state  = {"model": os.getenv("OLLAMA_MODEL", "llama3")}
 AVAILABLE_MODELS = [
     "llama3.1:latest",
     "qwen3.5:latest",
+    "qwen3.5:4b",
     "qwen2.5:7b",
 ]
 WHISPER_MODEL  = os.getenv("WHISPER_MODEL",  "medium")
