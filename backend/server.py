@@ -334,9 +334,13 @@ def _strip_think_blocks(text: str) -> str:
 # ── HA entity cache (refreshed in background every 60s) ───────────────────────
 _ha_entity_cache: list[dict] = []
 _ha_entity_cache_ts: float = 0.0
+_ha_area_cache: list[dict] = []        # [{area_id, name, aliases, picture}]
+_ha_device_cache: list[dict] = []      # [{id, name, area_id, manufacturer, model, ...}]
+_ha_entity_reg_cache: list[dict] = []  # [{entity_id, area_id, device_id, ...}]
 
 async def _refresh_ha_cache():
     global _ha_entity_cache, _ha_entity_cache_ts
+    global _ha_area_cache, _ha_device_cache, _ha_entity_reg_cache
     try:
         entities = await ha_list_entities()
         if entities:
@@ -344,6 +348,25 @@ async def _refresh_ha_cache():
             _ha_entity_cache_ts = time.time()
     except Exception:
         pass
+    # Fetch area, device, and entity registries via websocket-style REST endpoints
+    if HA_TOKEN:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                headers = _ha_headers()
+                # Area registry
+                r = await client.get(f"{HA_URL}/api/config/area_registry/list", headers=headers)
+                if r.status_code == 200:
+                    _ha_area_cache = r.json()
+                # Device registry
+                r = await client.get(f"{HA_URL}/api/config/device_registry/list", headers=headers)
+                if r.status_code == 200:
+                    _ha_device_cache = r.json()
+                # Entity registry
+                r = await client.get(f"{HA_URL}/api/config/entity_registry/list", headers=headers)
+                if r.status_code == 200:
+                    _ha_entity_reg_cache = r.json()
+        except Exception as e:
+            print(f"[ha_cache] Registry fetch failed (non-fatal): {e}", flush=True)
 
 def _get_cached_ha_entities() -> list[dict]:
     return _ha_entity_cache
@@ -1015,6 +1038,47 @@ async def chat(body: dict):
             entity_block += "\n\n== CANVAS DEVICES (use the entity_id shown after 'control via:') ==\n" + "\n".join(canvas_lines)
         dynamic_prompt += entity_block
 
+    # Inject areas with their entities
+    if _ha_area_cache:
+        area_map: dict[str, list[str]] = {}  # area_name → [entity_ids]
+        entity_area: dict[str, str] = {}     # entity_id → area_id
+        # Build entity→area mapping from entity registry
+        for ereg in _ha_entity_reg_cache:
+            if ereg.get("area_id"):
+                entity_area[ereg["entity_id"]] = ereg["area_id"]
+        # Also map via device registry
+        dev_area = {d.get("id", ""): d.get("area_id", "") for d in _ha_device_cache if d.get("area_id")}
+        for ereg in _ha_entity_reg_cache:
+            if not ereg.get("area_id") and ereg.get("device_id") in dev_area:
+                entity_area[ereg["entity_id"]] = dev_area[ereg["device_id"]]
+        # Group by area name
+        area_id_to_name = {a.get("area_id", ""): a.get("name", "") for a in _ha_area_cache}
+        for eid, aid in entity_area.items():
+            aname = area_id_to_name.get(aid, aid)
+            area_map.setdefault(aname, []).append(eid)
+        if area_map:
+            area_lines = []
+            for aname, eids in sorted(area_map.items()):
+                area_lines.append(f"  {aname}: {', '.join(eids[:10])}" + (f" (+{len(eids)-10} more)" if len(eids) > 10 else ""))
+            dynamic_prompt += "\n\n== HA AREAS (use area_id for group commands like homeassistant.turn_off) ==\n" + "\n".join(area_lines)
+
+    # Inject device info
+    if _ha_device_cache:
+        dev_lines = []
+        for d in _ha_device_cache:
+            name = d.get("name_by_user") or d.get("name") or ""
+            mfr = d.get("manufacturer", "")
+            model = d.get("model", "")
+            area_id = d.get("area_id", "")
+            area_name = ""
+            if area_id and _ha_area_cache:
+                area_name = next((a["name"] for a in _ha_area_cache if a.get("area_id") == area_id), "")
+            if name and (mfr or model):
+                loc = f" [{area_name}]" if area_name else ""
+                dev_lines.append(f"  {name} — {mfr} {model}{loc}")
+        if dev_lines:
+            dynamic_prompt += "\n\n== HA DEVICES ==\n" + "\n".join(dev_lines[:20])
+
     if mem_summary and mem_summary != "No memory entries yet.":
         dynamic_prompt += f"\n\n== SKY MEMORY (relevant farm history) ==\n{mem_summary}"
 
@@ -1034,7 +1098,8 @@ async def chat(body: dict):
         if not tokens:
             full = "[No response from LLM — check Ollama is running and model is pulled]"
         else:
-            full = _strip_think_blocks("".join(tokens))
+            raw_full = "".join(tokens)
+            full = _strip_think_blocks(raw_full)
 
             # ── Feature 4: Multi-step tool chaining ───────────────────────
             for _tool_pass in range(3):
@@ -1132,11 +1197,24 @@ async def chat(body: dict):
         full = f"[LLM error: {e}]"
 
     # ── Execute any embedded HA command ───────────────────────────────────
-    print(f"[chat] RAW LLM output ({len(full)} chars): {full[:500]}", flush=True)
-    cmd = extract_ha_command(full)
-    timer_cfg_check = extract_timer(full)
+    # Search both stripped AND raw (with think blocks) — model may put JSON inside <think>
+    raw_full = locals().get("raw_full", full)
+    if raw_full != full:
+        print(f"[chat] RAW with think ({len(raw_full)} chars): {raw_full[:500]}", flush=True)
+    print(f"[chat] Stripped output ({len(full)} chars): {full[:300]}", flush=True)
+    cmd = extract_ha_command(full) or extract_ha_command(raw_full)
+    timer_cfg_from_text = extract_timer(full) or extract_timer(raw_full)
+    if cmd and not extract_ha_command(full):
+        print(f"[chat] Found command inside <think> block", flush=True)
     print(f"[chat] extract_ha_command → {cmd}", flush=True)
-    print(f"[chat] extract_timer → {timer_cfg_check}", flush=True)
+    print(f"[chat] extract_timer → {timer_cfg_from_text}", flush=True)
+    # If timer was found in text but not already scheduled via tool chaining, schedule it now
+    if timer_cfg_from_text and timer_info is None:
+        try:
+            timer_id = await schedule_timer(timer_cfg_from_text["entity_id"], timer_cfg_from_text["minutes"], timer_cfg_from_text["domain"])
+            timer_info = {"entity_id": timer_cfg_from_text["entity_id"], "minutes": timer_cfg_from_text["minutes"], "timer_id": timer_id}
+        except Exception as te:
+            print(f"[chat] Timer schedule failed: {te}", flush=True)
     cmd_entity_id = ""
     if cmd:
         cmd_entity_id = cmd.get("entity_id", "")
