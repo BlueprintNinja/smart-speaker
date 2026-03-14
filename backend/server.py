@@ -51,6 +51,12 @@ in your response using exactly this format:
 {"action": "<domain>.<service>", "entity_id": "<entity_id>", "extra": {}}
 ```
 
+CRITICAL RULES:
+- NEVER say "Here is the JSON command" or describe/narrate the JSON block. Just embed it silently.
+- NEVER show the raw JSON to the user in your spoken reply.
+- Your spoken reply should confirm the action naturally: "Turning on irrigation zone 1 for 10 minutes."
+- The JSON block is parsed by the system — the user never needs to see it.
+
 == LIGHTS ==
   light.turn_on, light.turn_off, light.toggle
   extra: {"brightness_pct": 80}  |  {"rgb_color": [255, 100, 0]}  |  {"color_temp": 300}
@@ -330,14 +336,25 @@ def extract_ha_command(llm_response: str) -> dict | None:
     """
     Parse the JSON command block the LLM embeds in its reply.
     Returns the parsed dict or None if no command was found.
+    Handles malformed action fields like "switch" (missing service).
     """
     match = re.search(r"```json\s*(\{.*?\})\s*```", llm_response, re.DOTALL)
     if not match:
         return None
     try:
-        return json.loads(match.group(1))
+        cmd = json.loads(match.group(1))
     except json.JSONDecodeError:
         return None
+    # Normalize action: if it's just a domain with no service, infer turn_on
+    action = cmd.get("action", "")
+    if action and "." not in action:
+        # Guess service from entity_id or default to turn_on
+        entity_id = cmd.get("entity_id", "")
+        if any(kw in llm_response.lower() for kw in ["turn off", "switch off", "disable", "stop"]):
+            cmd["action"] = f"{action}.turn_off"
+        else:
+            cmd["action"] = f"{action}.turn_on"
+    return cmd
 
 
 def strip_command_block(text: str) -> str:
