@@ -69,12 +69,15 @@ CRITICAL RULES:
   switch.turn_on, switch.turn_off, switch.toggle
 
 == IRRIGATION & FARM ==
-  switch.turn_on / switch.turn_off  — for irrigation zone switches (e.g. switch.irrigation_zone_1)
-  input_boolean.turn_on / turn_off  — for virtual irrigation toggles
+  input_boolean.turn_on / input_boolean.turn_off  — for canvas-managed irrigation zones
+    e.g. "irrigate zone 1" → entity_id: input_boolean.irrigation_zone_1
+  switch.turn_on / switch.turn_off  — only if a real physical switch exists in HA
   automation.trigger  — to trigger scheduled irrigation automations
-  For timed irrigation: use switch.turn_on with NO extra fields — just turn it on and confirm the duration verbally.
+  For timed irrigation: use input_boolean.turn_on with NO extra fields — confirm duration verbally.
   e.g. "Turning on irrigation zone 1 for 30 minutes — I'll remind you when to turn it off."
   Soil moisture sensors are read-only (sensor domain) — report their state, do not command them.
+  IMPORTANT: Canvas node entity IDs like switch.irrigation_zone_1 are registered as input_boolean.irrigation_zone_1 in HA.
+  Always prefer input_boolean.* for canvas nodes unless the entity list shows a real switch.*.
 
 == COVERS / GATES / BLINDS ==
   cover.open_cover, cover.close_cover, cover.stop_cover, cover.toggle
@@ -1185,12 +1188,17 @@ async def proactive_alert(body: dict):
 
 
 # ── NodeCanvas virtual device sync ────────────────────────────────────────────
+# Node types that should become controllable HA entities (not just read-only sensors)
+ACTIONABLE_NODE_TYPES = {"irrigation", "light", "switch"}
+
+
 @app.post("/canvas/sync")
 async def canvas_sync(body: dict):
     """
-    Push NodeCanvas placeholder nodes as virtual HA entities.
-    Each node becomes a sensor.canvas_* entity in HA so it appears
-    in the HA dashboard and Sky can reference it by entity_id.
+    Push NodeCanvas nodes as virtual HA entities.
+    - Read-only nodes (tensiometer, camera, rainpoint) → sensor.canvas_* state-machine entry.
+    - Actionable nodes (irrigation, light, switch) → also register the config entity_id
+      as a real input_boolean in HA so Sky can control it via input_boolean.turn_on/off.
     Body: { nodes: [ { id, type, config: { entity_id, friendly_name, ... } } ] }
     """
     nodes = body.get("nodes", [])
@@ -1203,6 +1211,7 @@ async def canvas_sync(body: dict):
         "irrigation": "mdi:water",
         "tensiometer": "mdi:water-percent",
         "rainpoint": "mdi:sprout",
+        "switch": "mdi:toggle-switch",
     }
     pushed = 0
     errors = []
@@ -1213,16 +1222,17 @@ async def canvas_sync(body: dict):
             ntype  = node.get("type", "unknown")
             cfg    = node.get("config", {})
             raw_id = cfg.get("entity_id") or f"canvas_{node.get('id','x')}"
-            # Ensure it's in sensor domain for virtual placeholder
-            entity_id = raw_id if "." in raw_id else f"sensor.{raw_id}"
-            # Prefix canvas_ so they're identifiable
-            if not entity_id.startswith("sensor.canvas_") and not entity_id.startswith("sensor.farm_"):
-                entity_id = "sensor.canvas_" + entity_id.split(".", 1)[-1]
+            friendly = cfg.get("friendly_name", raw_id)
 
-            payload = {
+            # ── 1. Always push sensor.canvas_* placeholder for dashboard display ──
+            canvas_id = raw_id if "." in raw_id else f"sensor.{raw_id}"
+            if not canvas_id.startswith("sensor.canvas_") and not canvas_id.startswith("sensor.farm_"):
+                canvas_id = "sensor.canvas_" + canvas_id.split(".", 1)[-1]
+
+            sensor_payload = {
                 "state": "placeholder",
                 "attributes": {
-                    "friendly_name": cfg.get("friendly_name", raw_id),
+                    "friendly_name": friendly,
                     "icon": DOMAIN_ICON.get(ntype, "mdi:devices"),
                     "device_type": ntype,
                     "canvas_node": True,
@@ -1231,17 +1241,40 @@ async def canvas_sync(body: dict):
                 }
             }
             try:
-                r = await client.post(
-                    f"{HA_URL}/api/states/{entity_id}",
-                    headers=_ha_headers(), json=payload
-                )
+                r = await client.post(f"{HA_URL}/api/states/{canvas_id}", headers=_ha_headers(), json=sensor_payload)
                 if r.status_code in (200, 201):
                     pushed += 1
                 else:
-                    errors.append(f"{entity_id}: HTTP {r.status_code}")
+                    errors.append(f"{canvas_id}: HTTP {r.status_code}")
             except Exception as e:
-                errors.append(f"{entity_id}: {e}")
+                errors.append(f"{canvas_id}: {e}")
 
+            # ── 2. For actionable nodes, also register a real input_boolean ──────
+            if ntype in ACTIONABLE_NODE_TYPES and raw_id:
+                # Derive input_boolean entity_id from config entity_id
+                # e.g. switch.irrigation_zone_1 → input_boolean.irrigation_zone_1
+                slug = raw_id.split(".", 1)[-1] if "." in raw_id else raw_id
+                ib_id = f"input_boolean.{slug}"
+
+                # Check if this input_boolean already exists — skip creation if so
+                state_r = await client.get(f"{HA_URL}/api/states/{ib_id}", headers=_ha_headers())
+                if state_r.status_code == 404:
+                    # Create it via the input_boolean REST API
+                    create_r = await client.post(
+                        f"{HA_URL}/api/config/input_boolean/config/{slug}",
+                        headers=_ha_headers(),
+                        json={"name": friendly, "icon": DOMAIN_ICON.get(ntype, "mdi:toggle-switch")},
+                    )
+                    if create_r.status_code in (200, 201):
+                        print(f"[canvas_sync] Created input_boolean {ib_id}", flush=True)
+                    else:
+                        print(f"[canvas_sync] input_boolean create failed {ib_id}: {create_r.status_code} {create_r.text}", flush=True)
+                        errors.append(f"{ib_id}: create HTTP {create_r.status_code}")
+                else:
+                    print(f"[canvas_sync] input_boolean {ib_id} already exists", flush=True)
+
+    # Refresh HA entity cache so newly created input_booleans are immediately available
+    asyncio.ensure_future(_refresh_ha_cache())
     return {"pushed": pushed, "total": len(nodes), "errors": errors}
 
 
