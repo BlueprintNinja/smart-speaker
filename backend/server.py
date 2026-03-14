@@ -68,7 +68,8 @@ CRITICAL RULES:
   switch.turn_on / switch.turn_off  — for irrigation zone switches (e.g. switch.irrigation_zone_1)
   input_boolean.turn_on / turn_off  — for virtual irrigation toggles
   automation.trigger  — to trigger scheduled irrigation automations
-  For timed irrigation: extra: {"variables": {"duration": 10}}  (minutes)
+  For timed irrigation: use switch.turn_on with NO extra fields — just turn it on and confirm the duration verbally.
+  e.g. "Turning on irrigation zone 1 for 30 minutes — I'll remind you when to turn it off."
   Soil moisture sensors are read-only (sensor domain) — report their state, do not command them.
 
 == COVERS / GATES / BLINDS ==
@@ -299,6 +300,10 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
 
     payload = {"entity_id": entity_id}
     if extra:
+        # Strip fields that HA rejects for simple on/off services
+        STRIP_FOR_SIMPLE = {"variables", "duration"}
+        if domain in ("switch", "input_boolean", "fan", "lock", "cover") and service in ("turn_on", "turn_off", "toggle"):
+            extra = {k: v for k, v in extra.items() if k not in STRIP_FOR_SIMPLE}
         payload.update(extra)
 
     url = f"{HA_URL}/api/services/{domain}/{service}"
