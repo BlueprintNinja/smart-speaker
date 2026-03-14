@@ -282,10 +282,16 @@ def get_kokoro():
 # ── Ollama helpers ────────────────────────────────────────────────────────────
 def _ollama_chat_stream(messages: list[dict], options: dict):
     url = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
+    # Ensure num_predict is set to avoid runaway generation
+    options.setdefault("num_predict", 512)
     payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": True, "options": options}
-    print(f"[ollama] POST {url} model={OLLAMA_MODEL}", flush=True)
+    # Disable extended thinking for reasoning models (qwen3, deepseek-r1, etc.)
+    # This dramatically reduces latency for conversational use cases
+    if any(t in OLLAMA_MODEL.lower() for t in ("qwen3", "deepseek-r1", "qwq")):
+        payload["think"] = False
+    print(f"[ollama] POST {url} model={OLLAMA_MODEL} num_predict={options.get('num_predict')}", flush=True)
     try:
-        with requests.post(url, json=payload, stream=True, timeout=120) as r:
+        with requests.post(url, json=payload, stream=True, timeout=(15, 120)) as r:
             print(f"[ollama] HTTP {r.status_code}", flush=True)
             r.raise_for_status()
             for line in r.iter_lines():
@@ -298,6 +304,11 @@ def _ollama_chat_stream(messages: list[dict], options: dict):
     except Exception as e:
         print(f"[ollama] ERROR: {e}", flush=True)
         raise
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks from model output."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
 # ── HA entity cache (refreshed in background every 60s) ───────────────────────
@@ -788,6 +799,7 @@ Recent farm memory:\n{mem_ctx}"""},
         def _gen():
             return "".join(_ollama_chat_stream(prompt_msgs, {"temperature": 0.4, "num_predict": 150}))
         brief = await loop.run_in_executor(None, _gen)
+        brief = _strip_think_blocks(brief)
         brief = strip_markdown_for_tts(brief)
     except Exception as e:
         brief = f"Good morning, Ray. Farm sensors are online. Check the dashboard for today's conditions."
@@ -975,7 +987,7 @@ async def chat(body: dict):
         if not tokens:
             full = "[No response from LLM — check Ollama is running and model is pulled]"
         else:
-            full = "".join(tokens)
+            full = _strip_think_blocks("".join(tokens))
 
             # ── Feature 4: Multi-step tool chaining ───────────────────────
             for _tool_pass in range(3):
@@ -1021,7 +1033,7 @@ async def chat(body: dict):
                 def _stream2():
                     return list(_ollama_chat_stream(trend_messages, {"temperature": 0.4}))
                 tokens2 = await loop.run_in_executor(None, _stream2)
-                full = "".join(tokens2) if tokens2 else trend_summary
+                full = _strip_think_blocks("".join(tokens2)) if tokens2 else trend_summary
 
             # ── LOGBOOK tool ──────────────────────────────────────────────
             logbook_match = re.search(r"\[FETCH_LOGBOOK:\s*(?:([^,\]]+),\s*)?(\d+)\]", full)
@@ -1061,7 +1073,7 @@ async def chat(body: dict):
                 def _stream_lb():
                     return list(_ollama_chat_stream(lb_messages, {"temperature": 0.4}))
                 tokens_lb = await loop.run_in_executor(None, _stream_lb)
-                full = "".join(tokens_lb) if tokens_lb else lb_summary
+                full = _strip_think_blocks("".join(tokens_lb)) if tokens_lb else lb_summary
 
             # ── Feature 6: TIMER tool ─────────────────────────────────────
             timer_cfg = extract_timer(full)
@@ -1868,7 +1880,7 @@ async def proactive_alert(body: dict):
     try:
         def _gen():
             return "".join(_ollama_chat_stream(prompt, {"temperature": 0.3, "num_predict": 80}))
-        spoken = await loop.run_in_executor(None, _gen)
+        spoken = _strip_think_blocks(await loop.run_in_executor(None, _gen))
     except Exception:
         spoken = message or f"Alert: {sensor} is {state}."
 
