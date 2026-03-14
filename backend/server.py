@@ -203,8 +203,8 @@ async def lifespan(app: FastAPI):
     asyncio.ensure_future(_cache_loop())
     # Start APScheduler for timed device actions and daily digest
     scheduler.start()
-    # Schedule daily farm digest at 13:00 UTC (7 AM CST / 8 AM CDT)
-    scheduler.add_job(_daily_digest_job, "cron", hour=13, minute=0, id="daily_digest", replace_existing=True)
+    # Schedule daily farm digest at 14:00 UTC (8 AM CST / 9 AM CDT)
+    scheduler.add_job(_daily_digest_job, "cron", hour=14, minute=0, id="daily_digest", replace_existing=True)
     print("[startup] APScheduler started.", flush=True)
     yield
     scheduler.shutdown(wait=False)
