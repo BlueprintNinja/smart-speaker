@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import NodeCanvas from "./NodeCanvas";
+import DeviceGrid from "./DeviceGrid";
 import Dashboard from "./Dashboard";
 
 // In Docker (nginx) mode VITE_API is not set — use relative /api so nginx proxies correctly.
@@ -281,7 +281,6 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
   const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory | decisions
-  const [showCanvas, setShowCanvas] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
   const [micError, setMicError] = useState(null);
@@ -1168,6 +1167,7 @@ export default function App() {
             ) : activeTab === 'devices' ? (
               <div className="mobile-section-scroll">
                 <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px', marginBottom: '0.5rem' }}>FARM DEVICES</div>
+                <DeviceGrid api={API} lastHaEvent={lastHaEvent} />
                 {/* Active timers */}
                 {activeTimers.length > 0 && (
                   <div style={{ marginBottom: '0.75rem' }}>
@@ -1337,6 +1337,7 @@ export default function App() {
             <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞</button>
             <button className={`tab-btn${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>🧠</button>
             <button className={`tab-btn${activeTab === 'decisions' ? ' active' : ''}`} onClick={() => { setActiveTab('decisions'); loadDecisions(); }}>📋</button>
+            <button className={`tab-btn${activeTab === 'devices' ? ' active' : ''}`} onClick={() => setActiveTab('devices')}>⚙</button>
           </div>
           <div style={{ padding: '1.5rem', display: sidebarCollapsed ? 'none' : 'block' }}>
             <div className="sidebar-stat" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.3rem' }}>
@@ -1460,7 +1461,12 @@ export default function App() {
         {/* ── Main View ── */}
         <div className="main-view" style={{ flexDirection: 'row' }}>
 
-          {activeTab === 'dashboard' ? (
+          {activeTab === 'devices' ? (
+            <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--amber-400)', fontFamily: 'JetBrains Mono', letterSpacing: '1px', marginBottom: '0.75rem', padding: '0 0.5rem' }}>FARM DEVICES</div>
+              <DeviceGrid api={API} lastHaEvent={lastHaEvent} />
+            </div>
+          ) : activeTab === 'dashboard' ? (
             <Dashboard api={API} />
           ) : activeTab === 'decisions' ? (
             /* Feature 3: Decision journal */
@@ -1661,7 +1667,7 @@ export default function App() {
           ) : (
             <>
               {/* ── Chat panel ── */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: showCanvas ? '1px solid var(--navy-700)' : 'none' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <div className="chat-history">
                   {messages.length === 0 ? (
                     <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.4 }}>
@@ -1750,24 +1756,9 @@ export default function App() {
                     </button>
                     {deepThink && <span style={{ fontSize: '0.55rem', color: '#a855f7', fontStyle: 'italic' }}>Extended reasoning enabled — responses may take longer</span>}
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                    <button
-                      className="tts-btn"
-                      onClick={() => setShowCanvas(v => !v)}
-                      style={{ background: showCanvas ? 'rgba(245,158,11,0.15)' : '', borderColor: showCanvas ? 'var(--amber-500)' : '', color: showCanvas ? 'var(--amber-400)' : '' }}
-                    >
-                      ⬡ {showCanvas ? 'HIDE NODES' : 'SHOW NODES'}
-                    </button>
-                  </div>
                 </div>
               </div>
 
-              {/* ── Node canvas panel (slide in alongside chat) ── */}
-              {showCanvas && (
-                <div style={{ width: '55%', flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <NodeCanvas api={API} lastHaEvent={lastHaEvent} />
-                </div>
-              )}
             </>
           )}
         </div>
