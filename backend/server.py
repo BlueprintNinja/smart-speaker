@@ -1175,6 +1175,28 @@ async def set_model(body: dict):
     return {"active": _ollama_state["model"], "num_ctx": _ollama_state["num_ctx"]}
 
 
+@app.get("/model/status")
+async def model_status():
+    """Check if the active model is loaded in Ollama VRAM."""
+    model = _ollama_state["model"]
+    try:
+        url = f"{OLLAMA_HOST}/api/ps"
+        r = requests.get(url, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            running = data.get("models") or []
+            for m in running:
+                if m.get("name", "").startswith(model) or m.get("model", "").startswith(model):
+                    size_vram = m.get("size_vram", 0)
+                    size = m.get("size", 0)
+                    return {"model": model, "status": "loaded", "size_vram": size_vram, "size": size}
+            return {"model": model, "status": "unloaded"}
+        return {"model": model, "status": "unknown"}
+    except Exception as e:
+        print(f"[model/status] Error checking Ollama: {e}", flush=True)
+        return {"model": model, "status": "error", "error": str(e)}
+
+
 @app.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...)):
     data = await audio.read()

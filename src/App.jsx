@@ -298,6 +298,8 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState(["llama3.1:latest", "qwen3.5:latest", "qwen3.5:4b", "qwen2.5:7b"]);
   const [activeModel, setActiveModel] = useState("qwen3.5:4b");
   const [numCtx, setNumCtx] = useState(4096);
+  const [modelStatus, setModelStatus] = useState("checking"); // checking | loaded | unloaded | error
+  const modelStatusRef = useRef(null);
   // Feature 5: wake word
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const wakeWordRef = useRef(false);
@@ -381,6 +383,13 @@ export default function App() {
   }, []);
 
   // ── Model selector ─────────────────────────────────────────────────────────
+  const checkModelStatus = useCallback(() => {
+    fetch(`${API}/model/status`)
+      .then(r => r.json())
+      .then(d => setModelStatus(d.status || 'unknown'))
+      .catch(() => setModelStatus('error'));
+  }, []);
+
   useEffect(() => {
     fetch(`${API}/models`)
       .then(r => r.json())
@@ -390,16 +399,25 @@ export default function App() {
         if (d.num_ctx) setNumCtx(d.num_ctx);
       })
       .catch(e => console.warn('[models] fetch failed, using defaults:', e));
+    checkModelStatus();
   }, []);
+
+  // Poll model status every 5s while unloaded/checking
+  useEffect(() => {
+    if (modelStatus === 'loaded') return;
+    const id = setInterval(checkModelStatus, 5000);
+    return () => clearInterval(id);
+  }, [modelStatus, checkModelStatus]);
 
   const switchModel = (model, ctx) => {
     if (model) setActiveModel(model);
     if (ctx) setNumCtx(ctx);
+    if (model) setModelStatus('checking');
     fetch(`${API}/model`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: model || activeModel, num_ctx: ctx || numCtx }),
-    }).catch(() => {});
+    }).then(() => { setTimeout(checkModelStatus, 1000); }).catch(() => {});
   };
 
   // ── Load Sky memory ─────────────────────────────────────────────────────────
@@ -1205,7 +1223,7 @@ export default function App() {
                 <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.3rem' }}>System Status</div>
                 {[
                   { name: 'Home Assistant', ok: haStatus === true },
-                  { name: 'LLM (Ollama)', ok: true },
+                  { name: 'LLM (Ollama)', ok: modelStatus !== 'error' },
                   { name: 'Whisper STT', ok: true },
                   { name: 'Kokoro TTS', ok: true },
                 ].map(s => (
@@ -1217,7 +1235,14 @@ export default function App() {
                 ))}
                 {availableModels.length > 0 && (
                   <div style={{ marginTop: '0.6rem' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>LLM Model</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                      <span style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '1px' }}>LLM Model</span>
+                      <span style={{ fontSize: '0.55rem', fontFamily: 'JetBrains Mono', padding: '1px 6px', borderRadius: '3px',
+                        background: modelStatus === 'loaded' ? 'rgba(74,222,128,0.12)' : modelStatus === 'unloaded' ? 'rgba(251,191,36,0.12)' : 'rgba(148,163,184,0.12)',
+                        color: modelStatus === 'loaded' ? '#4ade80' : modelStatus === 'unloaded' ? '#fbbf24' : '#94a3b8' }}>
+                        {modelStatus === 'loaded' ? '● READY' : modelStatus === 'unloaded' ? '○ IDLE' : modelStatus === 'checking' ? '◌ ...' : '✗ ERR'}
+                      </span>
+                    </div>
                     <select
                       value={activeModel}
                       onChange={e => switchModel(e.target.value, null)}
@@ -1247,6 +1272,11 @@ export default function App() {
                         ))}
                       </select>
                     </div>
+                    {modelStatus !== 'loaded' && modelStatus !== 'error' && (
+                      <div style={{ fontSize: '0.55rem', color: '#fbbf24', fontStyle: 'italic', marginTop: '0.25rem' }}>
+                        First message will load model into VRAM
+                      </div>
+                    )}
                   </div>
                 )}
                 <a href="http://192.168.254.131:8123" target="_blank" rel="noopener noreferrer"
@@ -1312,7 +1342,12 @@ export default function App() {
             <div className="sidebar-stat" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.3rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>LLM</span>
-                <span className="dot dot-green" title="Ollama" />
+                <span style={{ fontSize: '0.5rem', fontFamily: 'JetBrains Mono', padding: '1px 5px', borderRadius: '3px',
+                  background: modelStatus === 'loaded' ? 'rgba(74,222,128,0.12)' : modelStatus === 'unloaded' ? 'rgba(251,191,36,0.12)' : 'rgba(148,163,184,0.12)',
+                  color: modelStatus === 'loaded' ? '#4ade80' : modelStatus === 'unloaded' ? '#fbbf24' : '#94a3b8',
+                  letterSpacing: '0.5px' }}>
+                  {modelStatus === 'loaded' ? '● READY' : modelStatus === 'unloaded' ? '○ IDLE' : modelStatus === 'checking' ? '◌ ...' : '✗ ERR'}
+                </span>
               </div>
               {availableModels.length > 0 && (
                 <select
@@ -1345,6 +1380,11 @@ export default function App() {
                   ))}
                 </select>
               </div>
+              {modelStatus !== 'loaded' && modelStatus !== 'error' && (
+                <div style={{ fontSize: '0.5rem', color: '#fbbf24', fontStyle: 'italic', marginTop: '0.15rem' }}>
+                  First message will load model into VRAM
+                </div>
+              )}
             </div>
             <div className="sidebar-stat">
               <span>WHISPER</span>
