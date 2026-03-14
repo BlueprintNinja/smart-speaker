@@ -338,7 +338,10 @@ def extract_ha_command(llm_response: str) -> dict | None:
     Returns the parsed dict or None if no command was found.
     Handles malformed action fields like "switch" (missing service).
     """
+    # Try fenced block first, then bare inline JSON with "action" key
     match = re.search(r"```json\s*(\{.*?\})\s*```", llm_response, re.DOTALL)
+    if not match:
+        match = re.search(r"(\{[^{}]*\"action\"[^{}]*\})", llm_response, re.DOTALL)
     if not match:
         return None
     try:
@@ -358,8 +361,16 @@ def extract_ha_command(llm_response: str) -> dict | None:
 
 
 def strip_command_block(text: str) -> str:
-    """Remove the embedded JSON block from the spoken reply."""
-    return re.sub(r"```json\s*\{.*?\}\s*```", "", text, flags=re.DOTALL).strip()
+    """Remove the embedded JSON block from the spoken reply.
+    Handles both fenced ```json blocks and bare inline JSON objects."""
+    # Remove fenced ```json ... ``` blocks
+    text = re.sub(r"```json\s*\{.*?\}\s*```", "", text, flags=re.DOTALL)
+    # Remove bare JSON objects (starting with { containing "action": )
+    text = re.sub(r"\{[^{}]*\"action\"[^{}]*\}", "", text, flags=re.DOTALL)
+    # Clean up leftover punctuation/whitespace artefacts like trailing ". " or double spaces
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\.\s*\.", ".", text)
+    return text.strip()
 
 
 # ── WAV synthesis helper ───────────────────────────────────────────────────────
