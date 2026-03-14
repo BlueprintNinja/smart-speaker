@@ -282,9 +282,28 @@ export default function App() {
   const audioElRef = useRef(null);
   const audioUnlockedRef = useRef(false);
 
+  const abortRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const bottomRef = useRef(null);
+
+  // Stop/interrupt: cancel fetch + stop audio + reset state
+  const stopAll = useCallback(() => {
+    // Abort any in-flight chat request
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+    // Stop audio playback
+    if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
+    // Reset the audio chain so future playback isn't blocked
+    audioChainRef.current = Promise.resolve();
+    // Stop recording if active
+    if (mediaRecorderRef.current && isRecording) {
+      try { mediaRecorderRef.current.stop(); } catch (_) {}
+      setIsRecording(false);
+    }
+    setLoading(false);
+    setOrbState("idle");
+    console.log("[stop] Interrupted");
+  }, [isRecording]);
 
   // iOS audio unlock: create a single Audio element and "prime" it on first user gesture
   useEffect(() => {
@@ -643,11 +662,14 @@ export default function App() {
     setMessages(prev => [...prev, newMsg]);
     setInput("");
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, session_id: sessionId, deep_think: deepThink }),
+        signal: controller.signal,
       });
       const data = await res.json();
       const reply = data.reply || "";
@@ -674,9 +696,14 @@ export default function App() {
       // Speak once, wait for it to finish
       if (reply.trim()) await playTTS(reply);
     } catch (err) {
-      console.error("Chat failed", err);
-      setMessages(prev => [...prev, { role: "bot", text: "[Error contacting server]" }]);
+      if (err.name === 'AbortError') {
+        console.log("[chat] Request aborted by user");
+      } else {
+        console.error("Chat failed", err);
+        setMessages(prev => [...prev, { role: "bot", text: "[Error contacting server]" }]);
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
       setOrbState("idle");
     }
@@ -818,16 +845,20 @@ export default function App() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <button
                       className={`mobile-orb ${orbState}`}
-                      onTouchStart={(e) => { e.preventDefault(); startListening(); }}
-                      onTouchEnd={(e) => { e.preventDefault(); stopListening(); }}
-                      onMouseDown={startListening}
-                      onMouseUp={stopListening}
+                      {...(loading || orbState === 'thinking'
+                        ? { onClick: (e) => { e.preventDefault(); stopAll(); } }
+                        : { onTouchStart: (e) => { e.preventDefault(); startListening(); }, onTouchEnd: (e) => { e.preventDefault(); stopListening(); }, onMouseDown: startListening, onMouseUp: stopListening }
+                      )}
                     >
-                      <div style={{ width: '28%', height: '28%', border: '2px solid white', borderRadius: '50%' }} />
+                      {loading || orbState === 'thinking' ? (
+                        <div style={{ width: '24%', height: '24%', background: 'white', borderRadius: '3px' }} />
+                      ) : (
+                        <div style={{ width: '28%', height: '28%', border: '2px solid white', borderRadius: '50%' }} />
+                      )}
                     </button>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                      <span style={{ fontSize: '0.6rem', color: 'var(--navy-400)', fontFamily: 'JetBrains Mono', fontWeight: 'bold' }}>
-                        {orbState === 'listening' ? 'LISTENING...' : orbState === 'thinking' ? 'THINKING...' : 'HOLD ORB TO SPEAK'}
+                      <span style={{ fontSize: '0.6rem', color: loading ? '#f87171' : 'var(--navy-400)', fontFamily: 'JetBrains Mono', fontWeight: 'bold' }}>
+                        {loading || orbState === 'thinking' ? 'TAP ■ TO STOP' : orbState === 'listening' ? 'LISTENING...' : 'HOLD ORB TO SPEAK'}
                       </span>
                       <div className="mobile-text-row">
                         <textarea
@@ -1355,15 +1386,19 @@ export default function App() {
                   <div className="orb-row">
                     <button
                       className={`orb-btn ${orbState}`}
-                      onMouseDown={startListening}
-                      onMouseUp={stopListening}
-                      onTouchStart={startListening}
-                      onTouchEnd={stopListening}
+                      {...(loading || orbState === 'thinking'
+                        ? { onClick: stopAll }
+                        : { onMouseDown: startListening, onMouseUp: stopListening, onTouchStart: startListening, onTouchEnd: stopListening }
+                      )}
                     >
-                      <div style={{ width: '30%', height: '30%', border: '2px solid white', borderRadius: '50%' }} />
+                      {loading || orbState === 'thinking' ? (
+                        <div style={{ width: '26%', height: '26%', background: 'white', borderRadius: '3px' }} />
+                      ) : (
+                        <div style={{ width: '30%', height: '30%', border: '2px solid white', borderRadius: '50%' }} />
+                      )}
                     </button>
                     <span style={{ fontSize: '0.65rem', marginTop: '0.5rem', color: 'var(--navy-400)', fontWeight: 'bold' }}>
-                      {orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
+                      {loading || orbState === 'thinking' ? 'TAP TO STOP' : orbState === 'listening' ? 'HOLD TO TRANSMIT' : 'READY TO RECEIVE'}
                     </span>
                     {micError && (
                       <span style={{ fontSize: '0.62rem', color: '#f87171', textAlign: 'center', maxWidth: '200px', marginTop: '0.25rem' }}>
