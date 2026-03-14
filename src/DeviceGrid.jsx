@@ -4,9 +4,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // DEFAULT DEVICES — seeded from the old canvas sample
 // ─────────────────────────────────────────────────────────────────────────────
 const DEFAULT_DEVICES = [
-  { entity_id: "switch.irrigation_zone_1", name: "Zone 1", icon: "🌊", color: "#0ea5e9" },
-  { entity_id: "switch.irrigation_zone_2", name: "Zone 2", icon: "🌊", color: "#0ea5e9" },
-  { entity_id: "switch.irrigation_zone_3", name: "Zone 3", icon: "🌊", color: "#0ea5e9" },
+  { entity_id: "switch.tuya_master_valve_1", name: "GIEX Valve 1 (Rows 1-4)", icon: "🌊", color: "#0ea5e9" },
+  { entity_id: "switch.tuya_master_valve_2", name: "GIEX Valve 2 (Rows 5-8)", icon: "🌊", color: "#0ea5e9" },
   { entity_id: "light.barn_light", name: "Barn Light", icon: "💡", color: "#f59e0b" },
   { entity_id: "light.field_light", name: "Field Light", icon: "💡", color: "#f59e0b" },
   { entity_id: "sensor.tensiometer_field1", name: "Field 1 Moisture", icon: "💧", color: "#10b981" },
@@ -15,7 +14,7 @@ const DEFAULT_DEVICES = [
   { entity_id: "sensor.rainpoint_soil_moisture", name: "RainPoint BLE", icon: "🌱", color: "#34d399" },
 ];
 
-const STORAGE_KEY = "device_grid_v1";
+const STORAGE_KEY = "device_grid_v2";
 const ICON_MAP = {
   light: { icon: "💡", color: "#f59e0b" },
   switch: { icon: "🔌", color: "#0ea5e9" },
