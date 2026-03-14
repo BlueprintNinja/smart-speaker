@@ -225,19 +225,35 @@ RULES for FETCH_LOGBOOK:
 When the user asks you to run something for a set duration (irrigation, lights, etc.), after sending the
 JSON command to turn it on, also emit a TIMER tag to schedule automatic turn-off:
 
-[TIMER: <entity_id>, <minutes>, <domain>]
+[TIMER: <entity_id>, <value>, <unit>, <domain>]
+
+unit must be one of: seconds, minutes, hours
 
 Examples:
-- "Turn on zone 1 for 30 minutes" → JSON turn_on + [TIMER: input_boolean.irrigation_zone_1, 30, input_boolean]
-- "Turn on barn lights for 1 hour" → JSON turn_on + [TIMER: light.barn_lights, 60, light]
+- "Turn on zone 1 for 30 minutes" → JSON turn_on + [TIMER: input_boolean.irrigation_zone_1, 30, minutes, input_boolean]
+- "Turn on barn lights for 1 hour" → JSON turn_on + [TIMER: light.barn_lights, 1, hours, light]
+- "Irrigate for 30 seconds" → JSON turn_on + [TIMER: input_boolean.irrigation_zone_1, 30, seconds, input_boolean]
+
+For MULTIPLE devices, emit MULTIPLE JSON blocks and MULTIPLE TIMER tags — one per device:
+- "Turn on zone 1 and zone 2 for 30 seconds each" →
+  ```json
+  {"action": "input_boolean.turn_on", "entity_id": "input_boolean.irrigation_zone_1"}
+  ```
+  ```json
+  {"action": "input_boolean.turn_on", "entity_id": "input_boolean.irrigation_zone_2"}
+  ```
+  [TIMER: input_boolean.irrigation_zone_1, 30, seconds, input_boolean]
+  [TIMER: input_boolean.irrigation_zone_2, 30, seconds, input_boolean]
 
 The timer is managed natively by Home Assistant — it persists across restarts and shows in the HA dashboard.
 
 RULES for TIMER:
+- Always include the unit (seconds, minutes, or hours) so durations are precise.
 - Always include the domain so the auto-off fires the correct service.
 - For canvas devices (irrigation, switches), use the input_boolean entity_id shown in the CANVAS DEVICES section.
-- Confirm the duration verbally: "Turning on zone 1 for 30 minutes, Ray — I'll turn it off automatically."
-- Do NOT emit TIMER for actions that don't have a natural end (locks, scenes, thermostat setpoints)."""
+- Confirm the duration verbally: "Turning on zone 1 for 30 seconds, Ray — I'll turn it off automatically."
+- Do NOT emit TIMER for actions that don't have a natural end (locks, scenes, thermostat setpoints).
+- When controlling MULTIPLE devices, emit a separate JSON command block AND TIMER for EACH device."""
 
 
 SYSTEM_PROMPT = _build_system_prompt()
@@ -666,32 +682,44 @@ async def ha_list_entities(domain: str = None) -> list[dict]:
         return []
 
 
-def extract_ha_command(llm_response: str) -> dict | None:
-    """
-    Parse the JSON command block the LLM embeds in its reply.
-    Returns the parsed dict or None if no command was found.
-    Handles malformed action fields like "switch" (missing service).
-    """
-    # Try fenced block first, then bare inline JSON with "action" key
-    match = re.search(r"```json\s*(\{.*?\})\s*```", llm_response, re.DOTALL)
-    if not match:
-        match = re.search(r"(\{[^{}]*\"action\"[^{}]*\})", llm_response, re.DOTALL)
-    if not match:
-        return None
-    try:
-        cmd = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    # Normalize action: if it's just a domain with no service, infer turn_on
+def _normalize_command(cmd: dict, context: str = "") -> dict:
+    """Normalize a parsed command dict: fix action if missing service."""
     action = cmd.get("action", "")
     if action and "." not in action:
-        # Guess service from entity_id or default to turn_on
-        entity_id = cmd.get("entity_id", "")
-        if any(kw in llm_response.lower() for kw in ["turn off", "switch off", "disable", "stop"]):
+        if any(kw in context.lower() for kw in ["turn off", "switch off", "disable", "stop"]):
             cmd["action"] = f"{action}.turn_off"
         else:
             cmd["action"] = f"{action}.turn_on"
     return cmd
+
+
+def extract_ha_command(llm_response: str) -> dict | None:
+    """Parse the FIRST JSON command block. Returns dict or None."""
+    cmds = extract_all_ha_commands(llm_response)
+    return cmds[0] if cmds else None
+
+
+def extract_all_ha_commands(llm_response: str) -> list[dict]:
+    """Parse ALL JSON command blocks the LLM embeds in its reply."""
+    commands = []
+    # Find all fenced json blocks
+    for m in re.finditer(r"```json\s*(\{.*?\})\s*```", llm_response, re.DOTALL):
+        try:
+            cmd = json.loads(m.group(1))
+            if "action" in cmd:
+                commands.append(_normalize_command(cmd, llm_response))
+        except json.JSONDecodeError:
+            pass
+    # If no fenced blocks, try bare inline JSON
+    if not commands:
+        for m in re.finditer(r"(\{[^{}]*\"action\"[^{}]*\})", llm_response, re.DOTALL):
+            try:
+                cmd = json.loads(m.group(1))
+                if "action" in cmd:
+                    commands.append(_normalize_command(cmd, llm_response))
+            except json.JSONDecodeError:
+                pass
+    return commands
 
 
 def strip_command_block(text: str) -> str:
@@ -713,15 +741,44 @@ def strip_command_block(text: str) -> str:
 
 
 def extract_timer(llm_response: str) -> dict | None:
-    """Parse [TIMER: entity_id, minutes, domain] from LLM response."""
-    match = re.search(r"\[TIMER:\s*([^,\]]+),\s*(\d+(?:\.\d+)?),\s*([^\]]+)\]", llm_response)
-    if not match:
-        return None
-    return {
-        "entity_id": match.group(1).strip(),
-        "minutes": float(match.group(2).strip()),
-        "domain": match.group(3).strip(),
-    }
+    """Parse the FIRST [TIMER:] tag. Returns dict or None."""
+    timers = extract_all_timers(llm_response)
+    return timers[0] if timers else None
+
+
+def _timer_value_to_minutes(value: float, unit: str) -> float:
+    """Convert a timer value+unit to minutes."""
+    unit = unit.lower().strip()
+    if unit.startswith("sec"):
+        return value / 60.0
+    elif unit.startswith("hour") or unit.startswith("hr"):
+        return value * 60.0
+    return value  # default: minutes
+
+
+def extract_all_timers(llm_response: str) -> list[dict]:
+    """Parse ALL [TIMER:] tags from LLM response. Supports both 3-param and 4-param formats."""
+    timers = []
+    # 4-param: [TIMER: entity_id, value, unit, domain]
+    for m in re.finditer(r"\[TIMER:\s*([^,\]]+),\s*(\d+(?:\.\d+)?),\s*(seconds?|minutes?|hours?|hrs?|secs?|mins?),\s*([^\]]+)\]", llm_response, re.IGNORECASE):
+        timers.append({
+            "entity_id": m.group(1).strip(),
+            "minutes": _timer_value_to_minutes(float(m.group(2).strip()), m.group(3).strip()),
+            "domain": m.group(4).strip(),
+        })
+    # 3-param fallback: [TIMER: entity_id, minutes, domain]
+    if not timers:
+        for m in re.finditer(r"\[TIMER:\s*([^,\]]+),\s*(\d+(?:\.\d+)?),\s*([^\],]+)\]", llm_response):
+            domain_candidate = m.group(3).strip()
+            # Skip if this looks like a unit (already caught above)
+            if domain_candidate.lower() in ("seconds", "second", "sec", "secs", "minutes", "minute", "min", "mins", "hours", "hour", "hr", "hrs"):
+                continue
+            timers.append({
+                "entity_id": m.group(1).strip(),
+                "minutes": float(m.group(2).strip()),
+                "domain": domain_candidate,
+            })
+    return timers
 
 
 def extract_create_automation(llm_response: str) -> dict | None:
@@ -1288,44 +1345,49 @@ async def chat(body: dict):
     except Exception as e:
         full = f"[LLM error: {e}]"
 
-    # ── Execute any embedded HA command ───────────────────────────────────
+    # ── Execute ALL embedded HA commands ─────────────────────────────────
     # Search both stripped AND raw (with think blocks) — model may put JSON inside <think>
     raw_full = locals().get("raw_full", full)
     if raw_full != full:
         print(f"[chat] RAW with think ({len(raw_full)} chars): {raw_full[:500]}", flush=True)
     print(f"[chat] Stripped output ({len(full)} chars): {full[:300]}", flush=True)
-    cmd = extract_ha_command(full) or extract_ha_command(raw_full)
-    timer_cfg_from_text = extract_timer(full) or extract_timer(raw_full)
-    if cmd and not extract_ha_command(full):
-        print(f"[chat] Found command inside <think> block", flush=True)
-    print(f"[chat] extract_ha_command → {cmd}", flush=True)
-    print(f"[chat] extract_timer → {timer_cfg_from_text}", flush=True)
-    # If timer was found in text but not already scheduled via tool chaining, schedule it now
-    if timer_cfg_from_text and timer_info is None:
-        try:
-            timer_id = await schedule_timer(timer_cfg_from_text["entity_id"], timer_cfg_from_text["minutes"], timer_cfg_from_text["domain"])
-            timer_info = {"entity_id": timer_cfg_from_text["entity_id"], "minutes": timer_cfg_from_text["minutes"], "timer_id": timer_id}
-        except Exception as te:
-            print(f"[chat] Timer schedule failed: {te}", flush=True)
+
+    all_cmds = extract_all_ha_commands(full) or extract_all_ha_commands(raw_full)
+    all_timers = extract_all_timers(full) or extract_all_timers(raw_full)
+    print(f"[chat] extract_all_ha_commands → {len(all_cmds)} commands", flush=True)
+    print(f"[chat] extract_all_timers → {len(all_timers)} timers", flush=True)
+
+    # Schedule any timers not already handled in tool chaining
+    if all_timers and timer_info is None:
+        for tcfg in all_timers:
+            try:
+                tid = await schedule_timer(tcfg["entity_id"], tcfg["minutes"], tcfg["domain"])
+                # Keep the first timer as the primary for response
+                if timer_info is None:
+                    timer_info = {"entity_id": tcfg["entity_id"], "minutes": tcfg["minutes"], "timer_id": tid}
+                print(f"[chat] Scheduled timer: {tcfg['entity_id']} for {tcfg['minutes']:.2f}min", flush=True)
+            except Exception as te:
+                print(f"[chat] Timer schedule failed: {te}", flush=True)
+
     # ── Extraction re-prompt: if the response looks like an action confirmation but
     #    has no JSON command, ask the LLM a quick focused question to extract it ──
-    if cmd is None and _is_action_request(user_msg):
+    if not all_cmds and _is_action_request(user_msg):
         print(f"[chat] Action detected but no JSON — running extraction re-prompt", flush=True)
         extract_prompt = (
             "You are a JSON extraction tool. The user asked a smart home assistant to do something, "
-            "and the assistant confirmed the action. Extract the Home Assistant service call as a JSON object.\n\n"
+            "and the assistant confirmed the action. Extract ALL Home Assistant service calls as JSON objects.\n\n"
             "RULES:\n"
             "- Canvas devices use input_boolean.turn_on / input_boolean.turn_off with input_boolean.{slug} entity IDs.\n"
-            "- Output ONLY a JSON object like: {\"action\": \"input_boolean.turn_on\", \"entity_id\": \"input_boolean.my_light\"}\n"
-            "- If there is also a timed duration, add a TIMER tag after the JSON.\n"
+            "- Output one ```json``` block per device. Example:\n"
+            "  ```json\n  {\"action\": \"input_boolean.turn_on\", \"entity_id\": \"input_boolean.irrigation_zone_1\"}\n  ```\n"
+            "- If there is a timed duration, add a TIMER tag per device:\n"
+            "  [TIMER: entity_id, value, unit, domain]  (unit = seconds, minutes, or hours)\n"
             "- If no action can be determined, output: NONE\n\n"
             f"AVAILABLE CANVAS DEVICES:\n"
         )
-        # Add canvas helpers so the extraction knows valid entity IDs
         helpers = _load_canvas_helpers()
         for slug in helpers:
             extract_prompt += f"  input_boolean.{slug}\n"
-        # Add non-canvas entities from cache
         for e in _get_cached_ha_entities():
             eid = e["entity_id"]
             d = eid.split(".")[0]
@@ -1335,44 +1397,47 @@ async def chat(body: dict):
 
         extract_messages = [
             {"role": "system", "content": extract_prompt},
-            {"role": "user", "content": f"User said: \"{user_msg}\"\nAssistant replied: \"{full}\"\n\nExtract the JSON command:"},
+            {"role": "user", "content": f"User said: \"{user_msg}\"\nAssistant replied: \"{full}\"\n\nExtract ALL JSON commands:"},
         ]
         try:
             def _extract_stream():
-                return list(_ollama_chat_stream(extract_messages, {"temperature": 0.1, "num_predict": 256}, deep_think=True))
+                return list(_ollama_chat_stream(extract_messages, {"temperature": 0.1, "num_predict": 512}, deep_think=True))
             extract_tokens = await loop.run_in_executor(None, _extract_stream)
             if extract_tokens:
                 extract_text = "".join(extract_tokens)
-                print(f"[extract] Re-prompt output: {extract_text[:300]}", flush=True)
-                cmd = extract_ha_command(extract_text)
-                if not timer_cfg_from_text:
-                    timer_cfg_from_text = extract_timer(extract_text)
-                    if timer_cfg_from_text and timer_info is None:
-                        try:
-                            timer_id = await schedule_timer(timer_cfg_from_text["entity_id"], timer_cfg_from_text["minutes"], timer_cfg_from_text["domain"])
-                            timer_info = {"entity_id": timer_cfg_from_text["entity_id"], "minutes": timer_cfg_from_text["minutes"], "timer_id": timer_id}
-                        except Exception:
-                            pass
-                if cmd:
-                    print(f"[extract] Recovered command: {cmd}", flush=True)
+                print(f"[extract] Re-prompt output: {extract_text[:400]}", flush=True)
+                all_cmds = extract_all_ha_commands(extract_text)
+                extra_timers = extract_all_timers(extract_text)
+                for tcfg in extra_timers:
+                    try:
+                        tid = await schedule_timer(tcfg["entity_id"], tcfg["minutes"], tcfg["domain"])
+                        if timer_info is None:
+                            timer_info = {"entity_id": tcfg["entity_id"], "minutes": tcfg["minutes"], "timer_id": tid}
+                        print(f"[extract] Scheduled timer: {tcfg['entity_id']} for {tcfg['minutes']:.2f}min", flush=True)
+                    except Exception:
+                        pass
+                if all_cmds:
+                    print(f"[extract] Recovered {len(all_cmds)} commands", flush=True)
                 else:
-                    print(f"[extract] No command extracted from re-prompt", flush=True)
+                    print(f"[extract] No commands extracted from re-prompt", flush=True)
         except Exception as ex:
             print(f"[extract] Re-prompt failed: {ex}", flush=True)
 
+    # Execute all commands
     cmd_entity_id = ""
-    if cmd:
-        cmd_entity_id = cmd.get("entity_id", "")
+    for cmd in all_cmds:
+        eid = cmd.get("entity_id", "")
+        if not cmd_entity_id:
+            cmd_entity_id = eid  # keep first for response
         try:
             domain, service = cmd["action"].split(".", 1)
-            ha_result = await ha_call_service(
-                domain, service,
-                cmd_entity_id,
-                cmd.get("extra") or {},
-            )
-            print(f"[chat] ha_call_service({domain}.{service}, {cmd_entity_id}) → {ha_result}", flush=True)
+            result = await ha_call_service(domain, service, eid, cmd.get("extra") or {})
+            if ha_result is None:
+                ha_result = result  # keep first for response
+            print(f"[chat] ha_call_service({domain}.{service}, {eid}) → {result}", flush=True)
         except Exception as e:
-            ha_result = {"error": str(e)}
+            if ha_result is None:
+                ha_result = {"error": str(e)}
 
     # If timer was set but no JSON command triggered the turn-on, do it now
     if timer_info and ha_result is None:
