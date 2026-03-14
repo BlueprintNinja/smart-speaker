@@ -1,15 +1,17 @@
 # Master Valve Irrigation — 8-Zone Blackberry System
 # Ray's Berry Farm
 #
-# Hardware: Rain Bird CP075 inline valve + Orbit 57044 24V AC transformer
-#           + TP-Link Kasa smart plug (switch.master_valve)
-#           + 2x Rainwave battery timers (4 zones each, 15min/zone)
+# Hardware: Tuya/Smart Life Dual Zone WiFi Water Timer (brass inlets)
+#           Entities: switch.tuya_master_valve_1 (Outlet 1 → Rainwave A)
+#                     switch.tuya_master_valve_2 (Outlet 2 → Rainwave B)
+#           + 2x Rainwave RW-74ZWT-2 4-Zone Timers
 #
-# Plumbing: Spigot → Hammer Arrestor → Master Valve → Long Hose → Y-Splitter
-#           → 2x Rainwaves → 8 Blackberry Rows
+# Plumbing: Spigot → Hammer Arrestor → Tuya Dual Timer
+#           Outlet 1 → Hose → Rainwave A → Rows 1-4
+#           Outlet 2 → Hose → Rainwave B → Rows 5-8
 #
-# Logic: HA controls the master valve (the "gatekeeper"). The Rainwaves handle
-#        zone sequencing on their own timers. HA just decides IF water flows today.
+# Logic: HA controls both Tuya outlets (the "gatekeeper"). The Rainwaves handle
+#        zone sequencing on their own battery timers. HA decides IF water flows.
 
 # ── Template Sensor: Which row is currently being watered? ──────────────────
 template:
@@ -18,21 +20,18 @@ template:
         unique_id: blackberry_row_status
         icon: mdi:fruit-cherries
         state: >
-          {% set master = states('switch.master_valve') %}
-          {% set time = now().strftime('%H:%M') %}
-          {% if master == 'off' %} Idle
-          {% elif '06:00' <= time < '06:15' %} Row 1
-          {% elif '06:15' <= time < '06:30' %} Row 2
-          {% elif '06:30' <= time < '06:45' %} Row 3
-          {% elif '06:45' <= time < '07:00' %} Row 4
-          {% elif '07:00' <= time < '07:15' %} Row 5
-          {% elif '07:15' <= time < '07:30' %} Row 6
-          {% elif '07:30' <= time < '07:45' %} Row 7
-          {% elif '07:45' <= time < '08:00' %} Row 8
-          {% else %} Pressurized / Standby
+          {% set v1 = states('switch.tuya_master_valve_1') %}
+          {% set v2 = states('switch.tuya_master_valve_2') %}
+          {% set t = now().strftime('%H:%M') %}
+          {% if v1 == 'off' and v2 == 'off' %} Idle
+          {% elif '06:00' <= t < '07:00' %} Watering Rows 1-4 (Timer A)
+          {% elif '07:00' <= t < '08:00' %} Watering Rows 5-8 (Timer B)
+          {% elif '05:55' <= t < '08:15' %} System Pressurized (Standby)
+          {% else %} Idle
           {% endif %}
         attributes:
-          master_valve: "{{ states('switch.master_valve') }}"
+          valve_1: "{{ states('switch.tuya_master_valve_1') }}"
+          valve_2: "{{ states('switch.tuya_master_valve_2') }}"
           soil_moisture: "{{ states('sensor.rainpoint_soil_moisture') }}%"
           soil_status: "{{ states('sensor.soil_moisture_status') }}"
           total_zones: 8
@@ -45,9 +44,9 @@ automation:
   - id: sky_irrigation_daily_gatekeeper
     alias: "Sky - Irrigation Daily Gatekeeper"
     description: >
-      Opens the master valve at 5:50 AM if weather is dry.
-      Stays on for 2h20m to cover both Rainwave timer cycles (8 zones × 15min).
-      Skips if raining or >40% precipitation probability.
+      Opens both Tuya valve outlets at 5:50 AM if weather is dry and soil needs water.
+      Stays on for 2h25m to cover both Rainwave timer cycles (8 zones × 15min).
+      Skips if raining, >40% precipitation probability, or soil already saturated.
     mode: single
     trigger:
       - platform: time
@@ -72,26 +71,30 @@ automation:
     action:
       - service: switch.turn_on
         target:
-          entity_id: switch.master_valve
+          entity_id:
+            - switch.tuya_master_valve_1
+            - switch.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.master_valve"
+          sensor: "switch.tuya_master_valve_1"
           state: "on"
           message: >
-            Master valve opened — daily blackberry irrigation starting.
+            Both Tuya valve outlets opened — daily blackberry irrigation starting.
             Weather: {{ states('weather.home') }}.
             Soil moisture: {{ states('sensor.rainpoint_soil_moisture') }}%
             (threshold: {{ states('input_number.rainpoint_wet_threshold') }}%).
           severity: "info"
-      - delay: "02:20:00"
+      - delay: "02:25:00"
       - service: switch.turn_off
         target:
-          entity_id: switch.master_valve
+          entity_id:
+            - switch.tuya_master_valve_1
+            - switch.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.master_valve"
+          sensor: "switch.tuya_master_valve_1"
           state: "off"
-          message: "Master valve closed — daily irrigation cycle complete (8 zones × 15min)."
+          message: "Both Tuya valve outlets closed — daily irrigation cycle complete (8 zones × 15min)."
           severity: "info"
 
   # Weather skip notification — let Sky know when irrigation was skipped
@@ -120,7 +123,7 @@ automation:
     action:
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.master_valve"
+          sensor: "switch.tuya_master_valve_1"
           state: "skipped"
           message: >
             Daily irrigation skipped —
@@ -135,7 +138,7 @@ script:
   manual_blackberry_watering:
     alias: "Manual Blackberry Watering"
     icon: mdi:water-pump
-    description: "Opens the master valve for 30 minutes for on-demand watering."
+    description: "Opens both Tuya valve outlets for on-demand watering."
     mode: restart
     fields:
       duration_minutes:
@@ -146,21 +149,25 @@ script:
           run_duration: "{{ duration_minutes | default(30) | int }}"
       - service: switch.turn_on
         target:
-          entity_id: switch.master_valve
+          entity_id:
+            - switch.tuya_master_valve_1
+            - switch.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.master_valve"
+          sensor: "switch.tuya_master_valve_1"
           state: "manual_on"
-          message: "Manual watering started — master valve open for {{ run_duration }} minutes."
+          message: "Manual watering started — both Tuya outlets open for {{ run_duration }} minutes."
           severity: "info"
       - delay:
           minutes: "{{ run_duration }}"
       - service: switch.turn_off
         target:
-          entity_id: switch.master_valve
+          entity_id:
+            - switch.tuya_master_valve_1
+            - switch.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.master_valve"
+          sensor: "switch.tuya_master_valve_1"
           state: "manual_off"
-          message: "Manual watering complete — master valve closed after {{ run_duration }} minutes."
+          message: "Manual watering complete — both Tuya outlets closed after {{ run_duration }} minutes."
           severity: "info"

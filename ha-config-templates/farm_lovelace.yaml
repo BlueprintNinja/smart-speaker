@@ -68,13 +68,15 @@ views:
             name: Soil Temp (18cm)
 
       - type: entities
-        title: Blackberry Irrigation (Master Valve)
+        title: Blackberry Irrigation (Tuya Master Valve)
         icon: mdi:water-pump
         entities:
-          - entity: switch.master_valve
-            name: Master Valve
+          - entity: switch.tuya_master_valve_1
+            name: Valve Outlet 1 (Rows 1-4)
+          - entity: switch.tuya_master_valve_2
+            name: Valve Outlet 2 (Rows 5-8)
           - entity: sensor.blackberry_row_status
-            name: Current Row
+            name: Current Status
           - entity: sensor.rainpoint_soil_moisture
             name: Soil Moisture (RainPoint)
           - entity: sensor.soil_moisture_status
