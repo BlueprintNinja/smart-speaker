@@ -596,12 +596,13 @@ export default function App() {
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
-      recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+      recorder.ondataavailable = (e) => { console.log("[mic] Data chunk:", e.data.size, "bytes"); audioChunksRef.current.push(e.data); };
       recorder.onstop = handleAudioStop;
 
       recorder.start();
       setIsRecording(true);
       setOrbState("listening");
+      console.log("[mic] Recording started");
     } catch (err) {
       if (err.name === 'NotAllowedError') {
         setMicError('Mic permission denied. Allow microphone access in your browser settings.');
@@ -615,28 +616,42 @@ export default function App() {
   };
 
   const stopListening = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === "recording") {
+      console.log("[mic] Stopping recorder");
+      recorder.stop();
+      // Stop all tracks so mic indicator goes away
+      recorder.stream?.getTracks().forEach(t => t.stop());
       setIsRecording(false);
       setOrbState("thinking");
+    } else {
+      console.log("[mic] stopListening called but recorder state:", recorder?.state, "isRecording:", isRecording);
     }
   };
 
   const handleAudioStop = async () => {
     const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+    console.log("[mic] handleAudioStop — blob size:", audioBlob.size, "chunks:", audioChunksRef.current.length);
+    if (audioBlob.size === 0) {
+      console.warn("[mic] Empty audio blob, skipping transcription");
+      setOrbState("idle");
+      return;
+    }
     const formData = new FormData();
     formData.append("audio", audioBlob, "user_speech.webm");
 
     try {
       const res = await fetch(`${API}/transcribe`, { method: "POST", body: formData });
       const data = await res.json();
+      console.log("[mic] Transcription result:", data);
       if (data.text?.trim()) {
         sendText(data.text);
       } else {
+        console.log("[mic] Empty transcription, returning to idle");
         setOrbState("idle");
       }
     } catch (err) {
-      console.error("Transcription failed", err);
+      console.error("[mic] Transcription failed", err);
       setOrbState("idle");
     }
   };
