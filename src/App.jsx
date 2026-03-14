@@ -209,6 +209,37 @@ body {
   flex: 1; overflow-y: auto; padding: 1rem;
   display: flex; flex-direction: column; gap: 1rem;
 }
+.toast-container {
+  position: fixed; top: 0.75rem; right: 0.75rem; z-index: 9999;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  pointer-events: none; max-width: 360px;
+}
+.toast {
+  pointer-events: auto;
+  background: var(--navy-800); border: 1px solid var(--navy-600);
+  border-radius: 8px; padding: 0.6rem 0.85rem;
+  font-size: 0.72rem; font-family: 'Inter', sans-serif;
+  color: var(--text-main); box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  animation: toastIn 0.3s ease-out;
+  display: flex; align-items: flex-start; gap: 0.5rem;
+}
+.toast.toast-exit { animation: toastOut 0.3s ease-in forwards; }
+.toast-icon { font-size: 0.9rem; flex-shrink: 0; margin-top: 1px; }
+.toast-body { flex: 1; min-width: 0; }
+.toast-severity { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.5px; font-family: 'JetBrains Mono', monospace; margin-bottom: 2px; }
+.toast.info { border-left: 3px solid #60a5fa; }
+.toast.info .toast-severity { color: #60a5fa; }
+.toast.warning { border-left: 3px solid #fbbf24; }
+.toast.warning .toast-severity { color: #fbbf24; }
+.toast.critical { border-left: 3px solid #f87171; }
+.toast.critical .toast-severity { color: #f87171; }
+.toast-dismiss {
+  background: none; border: none; color: var(--navy-400); cursor: pointer;
+  font-size: 0.8rem; padding: 0; flex-shrink: 0; line-height: 1;
+}
+.toast-dismiss:hover { color: var(--text-main); }
+@keyframes toastIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes toastOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(40px); } }
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,6 +292,8 @@ export default function App() {
   const [memRawJson, setMemRawJson] = useState("");
   const [memLlmPreview, setMemLlmPreview] = useState(null);
   const [lastAlert, setLastAlert] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const toastIdRef = useRef(0);
   // Model selector
   const [availableModels, setAvailableModels] = useState([]);
   const [activeModel, setActiveModel] = useState("");
@@ -412,13 +445,8 @@ export default function App() {
         const data = await r.json();
         const alerts = data.alerts || [];
         for (const alert of alerts) {
-          // Show in chat (silent — no auto-TTS)
-          setMessages(prev => [...prev, {
-            role: "bot",
-            text: alert.text,
-            isAlert: true,
-            severity: alert.severity,
-          }]);
+          const tid = ++toastIdRef.current;
+          setToasts(prev => [...prev, { id: tid, text: alert.text, severity: alert.severity || 'info', exiting: false }]);
         }
         // Also refresh active timers display
         const tr = await fetch(`${API}/alerts/timers`);
@@ -429,6 +457,35 @@ export default function App() {
     const id = setInterval(poll, 10000);
     return () => clearInterval(id);
   }, []);
+
+  // Auto-dismiss toasts after 8s
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const ids = toasts.filter(t => !t.exiting).map(t =>
+      setTimeout(() => dismissToast(t.id), 8000)
+    );
+    return () => ids.forEach(clearTimeout);
+  }, [toasts.length]);
+
+  const dismissToast = useCallback((tid) => {
+    setToasts(prev => prev.map(t => t.id === tid ? { ...t, exiting: true } : t));
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== tid)), 300);
+  }, []);
+
+  const ToastOverlay = () => (
+    <div className="toast-container">
+      {toasts.map(t => (
+        <div key={t.id} className={`toast ${t.severity}${t.exiting ? ' toast-exit' : ''}`}>
+          <span className="toast-icon">{t.severity === 'critical' ? '🚨' : t.severity === 'warning' ? '⚠️' : 'ℹ️'}</span>
+          <div className="toast-body">
+            <div className="toast-severity">{t.severity}</div>
+            <div>{t.text}</div>
+          </div>
+          <button className="toast-dismiss" onClick={() => dismissToast(t.id)}>✕</button>
+        </div>
+      ))}
+    </div>
+  );
 
   // ── Proactive Farm Intelligence ─────────────────────────────────────────────
   const primeFarm = async (forceBrief = false) => {
@@ -918,6 +975,7 @@ export default function App() {
       <>
         <style>{styles}</style>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+        <ToastOverlay />
         <div className="mobile-container">
           {/* ── Header ── */}
           <div className="mobile-header">
@@ -967,11 +1025,6 @@ export default function App() {
                         {msg.role === 'bot' && msg.timerInfo && (
                           <div className="ha-action ok" style={{ borderColor: '#92400e', background: 'rgba(146,64,14,0.15)', color: '#fbbf24', marginTop: '0.4rem' }}>
                             ⏱ Auto-off {msg.timerInfo.minutes}min — {msg.timerInfo.label}
-                          </div>
-                        )}
-                        {msg.role === 'bot' && msg.isAlert && (
-                          <div className={`ha-action ${msg.severity === 'critical' ? 'err' : 'ok'}`} style={{ marginTop: '0.4rem' }}>
-                            {msg.severity === 'critical' ? '🚨' : '⚠'} {msg.severity || 'alert'}
                           </div>
                         )}
                       </div>
@@ -1231,6 +1284,7 @@ export default function App() {
   return (
     <>
       <style>{styles}</style>
+      <ToastOverlay />
       <div className="app-container">
         
         {/* ── Sidebar ── */}
@@ -1592,11 +1646,6 @@ export default function App() {
                           {msg.role === 'bot' && msg.timerInfo && (
                             <div className="ha-action ok" style={{ borderColor: '#92400e', background: 'rgba(146,64,14,0.15)', color: '#fbbf24' }}>
                               ⏱ Auto-off in {msg.timerInfo.minutes}min — {msg.timerInfo.label}
-                            </div>
-                          )}
-                          {msg.role === 'bot' && msg.isAlert && (
-                            <div className={`ha-action ${msg.severity === 'critical' ? 'err' : 'ok'}`}>
-                              {msg.severity === 'critical' ? '🚨' : '⚠'} {msg.severity || 'alert'}
                             </div>
                           )}
                           {msg.role === 'bot' && i < messages.length - 1 && (
