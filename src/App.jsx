@@ -527,99 +527,61 @@ export default function App() {
     setInput("");
 
     try {
-      const response = await fetch(`${API}/chat`, {
+      const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, session_id: sessionId }),
       });
+      const data = await res.json();
+      const reply = data.reply || "";
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let botText = "";
-      let buf = "";
-      let finalText = "";
-
-      // Add initial empty bot message
-      setMessages(prev => [...prev, { role: "bot", text: "", sources: [] }]);
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop();
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.token) {
-              botText += data.token;
-              updateLastBotMessage(botText, null, null);
-            } else if (data.event === "ha_result") {
-              updateLastBotMessage(null, null, data.result);
-              setLastHaEvent({ ...data.result, entity_id: data.entity_id });
-            } else if (data.event === "timer_set") {
-              const mins = data.minutes;
-              const label = data.entity_id?.split(".")[1]?.replace(/_/g, " ") || data.entity_id;
-              setMessages(prev => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.role === "bot") {
-                  next[next.length - 1] = { ...last, timerInfo: { entity_id: data.entity_id, minutes: mins, label, job_id: data.job_id } };
-                }
-                return next;
-              });
-              fetch(`${API}/alerts/timers`).then(r => r.json()).then(d => setActiveTimers(d.timers || [])).catch(() => {});
-            } else if (data.done) {
-              finalText = data.full || botText;
-            }
-          } catch (e) { /* malformed line */ }
-        }
+      // Build bot message with all metadata
+      const botMsg = { role: "bot", text: reply };
+      if (data.ha_result) {
+        botMsg.haResult = data.ha_result;
+        setLastHaEvent({ ...data.ha_result, entity_id: data.entity_id || "" });
       }
-      // Speak the full response once streaming is complete
-      if (finalText.trim()) playTTS(finalText);
+      if (data.timer) {
+        const t = data.timer;
+        const label = t.entity_id?.split(".")[1]?.replace(/_/g, " ") || t.entity_id;
+        botMsg.timerInfo = { ...t, label };
+        fetch(`${API}/alerts/timers`).then(r => r.json()).then(d => setActiveTimers(d.timers || [])).catch(() => {});
+      }
+
+      setMessages(prev => [...prev, botMsg]);
+
+      // Speak once, wait for it to finish
+      if (reply.trim()) await playTTS(reply);
     } catch (err) {
       console.error("Chat failed", err);
+      setMessages(prev => [...prev, { role: "bot", text: "[Error contacting server]" }]);
     } finally {
       setLoading(false);
       setOrbState("idle");
     }
   };
 
-  const updateLastBotMessage = (text, sources, haResult) => {
-    setMessages(prev => {
-      const next = [...prev];
-      const last = { ...next[next.length - 1] };
-      if (last.role === "bot") {
-        if (text !== null)     last.text = text;
-        if (sources !== null)  last.sources = sources;
-        if (haResult !== null) last.haResult = haResult;
-        next[next.length - 1] = last;
+  const playTTS = (text) => {
+    return new Promise(async (resolve) => {
+      try {
+        const res = await fetch(`${API}/tts_audio`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) { resolve(); return; }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+        await audio.play();
+      } catch (err) {
+        console.error("TTS playback error", err);
+        resolve();
       }
-      return next;
     });
-  };
-
-  const playTTS = async (text) => {
-    try {
-      const res = await fetch(`${API}/tts_audio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) return;
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      
-      await audio.play();
-      audio.onended = () => URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("TTS playback error", err);
-    }
   };
 
   const handleKey = (e) => {

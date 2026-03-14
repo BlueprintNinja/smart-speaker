@@ -832,114 +832,108 @@ async def chat(body: dict):
     _append_session(session_id, "user", user_msg)
     messages = [{"role": "system", "content": dynamic_prompt}] + session_history
 
-    async def generate():
-        full = ""
-        ha_result = None
-        loop = asyncio.get_event_loop()
+    full = ""
+    ha_result = None
+    timer_info = None
+    loop = asyncio.get_event_loop()
 
-        try:
-            def _stream():
-                return list(_ollama_chat_stream(messages, {"temperature": 0.6}))
+    try:
+        def _stream():
+            return list(_ollama_chat_stream(messages, {"temperature": 0.6}))
 
-            tokens = await loop.run_in_executor(None, _stream)
-            if not tokens:
-                yield f"data: {json.dumps({'token': '[No response from LLM — check Ollama is running and model is pulled]'})}\n\n"
-                full = ""
-            else:
-                full = "".join(tokens)
+        tokens = await loop.run_in_executor(None, _stream)
+        if not tokens:
+            full = "[No response from LLM — check Ollama is running and model is pulled]"
+        else:
+            full = "".join(tokens)
 
-                # ── Feature 4: Multi-step tool chaining ───────────────────────
-                # Run up to 3 tool-pass iterations so the LLM can chain tools
-                for _tool_pass in range(3):
-                    trend_match = re.search(r"\[FETCH_TREND:\s*([^,\]]+),\s*(\d+)\]", full)
-                    if not trend_match:
-                        break
-                    entity_id_t = trend_match.group(1).strip()
-                    hours_t = int(trend_match.group(2).strip())
-                    print(f"[trend] pass={_tool_pass+1} fetching {entity_id_t} for {hours_t}h", flush=True)
-                    try:
-                        trend_data = await ha_trend(entity_id_t, hours_t)
-                        stats = trend_data.get("stats", {})
-                        points = trend_data.get("points", [])
-                        if stats:
-                            trend_summary = (
-                                f"Historical data for {entity_id_t} over the last {hours_t} hours:\n"
-                                f"  Min: {stats['min']}  Max: {stats['max']}  "
-                                f"Mean: {stats['mean']}  Change: {stats['delta']:+}  "
-                                f"Samples: {stats['count']}\n"
+            # ── Feature 4: Multi-step tool chaining ───────────────────────
+            for _tool_pass in range(3):
+                trend_match = re.search(r"\[FETCH_TREND:\s*([^,\]]+),\s*(\d+)\]", full)
+                if not trend_match:
+                    break
+                entity_id_t = trend_match.group(1).strip()
+                hours_t = int(trend_match.group(2).strip())
+                print(f"[trend] pass={_tool_pass+1} fetching {entity_id_t} for {hours_t}h", flush=True)
+                try:
+                    trend_data = await ha_trend(entity_id_t, hours_t)
+                    stats = trend_data.get("stats", {})
+                    points = trend_data.get("points", [])
+                    if stats:
+                        trend_summary = (
+                            f"Historical data for {entity_id_t} over the last {hours_t} hours:\n"
+                            f"  Min: {stats['min']}  Max: {stats['max']}  "
+                            f"Mean: {stats['mean']}  Change: {stats['delta']:+}  "
+                            f"Samples: {stats['count']}\n"
+                        )
+                        if points:
+                            first = points[0]
+                            mid   = points[len(points) // 2]
+                            last  = points[-1]
+                            trend_summary += (
+                                f"  Start: {first['v']} at {first['t'][:16]}\n"
+                                f"  Mid:   {mid['v']} at {mid['t'][:16]}\n"
+                                f"  End:   {last['v']} at {last['t'][:16]}\n"
                             )
-                            if points:
-                                first = points[0]
-                                mid   = points[len(points) // 2]
-                                last  = points[-1]
-                                trend_summary += (
-                                    f"  Start: {first['v']} at {first['t'][:16]}\n"
-                                    f"  Mid:   {mid['v']} at {mid['t'][:16]}\n"
-                                    f"  End:   {last['v']} at {last['t'][:16]}\n"
-                                )
-                        else:
-                            trend_summary = f"No historical data found for {entity_id_t} in the last {hours_t} hours."
-                    except Exception as te:
-                        trend_summary = f"Could not fetch trend for {entity_id_t}: {te}"
+                    else:
+                        trend_summary = f"No historical data found for {entity_id_t} in the last {hours_t} hours."
+                except Exception as te:
+                    trend_summary = f"Could not fetch trend for {entity_id_t}: {te}"
 
-                    trend_messages = messages + [
-                        {"role": "assistant", "content": full},
-                        {"role": "user", "content": (
-                            f"[SYSTEM: Trend data retrieved]\n{trend_summary}\n"
-                            f"Now answer the user's original question naturally using this data. "
-                            f"You may emit another [FETCH_TREND:...] if you need more data, or answer directly."
-                        )},
-                    ]
-                    def _stream2():
-                        return list(_ollama_chat_stream(trend_messages, {"temperature": 0.4}))
-                    tokens2 = await loop.run_in_executor(None, _stream2)
-                    full = "".join(tokens2) if tokens2 else trend_summary
+                trend_messages = messages + [
+                    {"role": "assistant", "content": full},
+                    {"role": "user", "content": (
+                        f"[SYSTEM: Trend data retrieved]\n{trend_summary}\n"
+                        f"Now answer the user's original question naturally using this data. "
+                        f"You may emit another [FETCH_TREND:...] if you need more data, or answer directly."
+                    )},
+                ]
+                def _stream2():
+                    return list(_ollama_chat_stream(trend_messages, {"temperature": 0.4}))
+                tokens2 = await loop.run_in_executor(None, _stream2)
+                full = "".join(tokens2) if tokens2 else trend_summary
 
-                # ── Feature 6: TIMER tool ─────────────────────────────────────
-                timer_cfg = extract_timer(full)
-                if timer_cfg:
-                    job_id = schedule_timer(timer_cfg["entity_id"], timer_cfg["minutes"], timer_cfg["domain"])
-                    yield f"data: {json.dumps({'event': 'timer_set', 'entity_id': timer_cfg['entity_id'], 'minutes': timer_cfg['minutes'], 'job_id': job_id})}\n\n"
+            # ── Feature 6: TIMER tool ─────────────────────────────────────
+            timer_cfg = extract_timer(full)
+            if timer_cfg:
+                job_id = schedule_timer(timer_cfg["entity_id"], timer_cfg["minutes"], timer_cfg["domain"])
+                timer_info = {"entity_id": timer_cfg["entity_id"], "minutes": timer_cfg["minutes"], "job_id": job_id}
 
-                # Strip all tool tags, JSON blocks, and markdown before streaming
-                spoken = strip_command_block(full)
-                spoken = strip_markdown_for_tts(spoken)
-                for word in re.findall(r'\S+\s*', spoken):
-                    yield f"data: {json.dumps({'token': word})}\n\n"
+    except Exception as e:
+        full = f"[LLM error: {e}]"
 
+    # ── Execute any embedded HA command ───────────────────────────────────
+    cmd = extract_ha_command(full)
+    cmd_entity_id = ""
+    if cmd:
+        cmd_entity_id = cmd.get("entity_id", "")
+        try:
+            domain, service = cmd["action"].split(".", 1)
+            ha_result = await ha_call_service(
+                domain, service,
+                cmd_entity_id,
+                cmd.get("extra") or {},
+            )
         except Exception as e:
-            err_msg = f"[LLM error: {e}]"
-            yield f"data: {json.dumps({'token': err_msg})}\n\n"
-            full = err_msg
+            ha_result = {"error": str(e)}
 
-        # ── Execute any embedded HA command ───────────────────────────────────
-        cmd = extract_ha_command(full)
-        if cmd:
-            try:
-                domain, service = cmd["action"].split(".", 1)
-                ha_result = await ha_call_service(
-                    domain, service,
-                    cmd.get("entity_id", ""),
-                    cmd.get("extra") or {},
-                )
-            except Exception as e:
-                ha_result = {"error": str(e)}
+    spoken = strip_command_block(full)
+    spoken = strip_markdown_for_tts(spoken)
 
-            yield f"data: {json.dumps({'event': 'ha_result', 'result': ha_result, 'entity_id': cmd.get('entity_id', '')})}\n\n"
+    # Feature 3: Log recommendation if present
+    _maybe_log_recommendation(spoken, context=user_msg)
 
-        spoken = strip_command_block(full)
-        spoken = strip_markdown_for_tts(spoken)
+    # Feature 2: Persist assistant reply to session
+    _append_session(session_id, "assistant", spoken)
 
-        # Feature 3: Log recommendation if present
-        _maybe_log_recommendation(spoken, context=user_msg)
+    result = {"reply": spoken}
+    if ha_result is not None:
+        result["ha_result"] = ha_result
+        result["entity_id"] = cmd_entity_id
+    if timer_info:
+        result["timer"] = timer_info
 
-        # Feature 2: Persist assistant reply to session
-        _append_session(session_id, "assistant", spoken)
-
-        yield f"data: {json.dumps({'done': True, 'full': spoken})}\n\n"
-
-    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
+    return JSONResponse(result)
 
 
 @app.post("/tts_audio")
