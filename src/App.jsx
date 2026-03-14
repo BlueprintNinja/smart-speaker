@@ -141,6 +141,74 @@ body {
 }
 .tab-btn:hover { color: var(--text-bright); }
 .tab-btn.active { color: var(--amber-400); border-bottom-color: var(--amber-400); }
+
+/* ── Mobile Layout ── */
+.mobile-container {
+  display: flex; flex-direction: column; height: 100vh; width: 100vw;
+  background: radial-gradient(circle at 50% 50%, var(--navy-900) 0%, var(--navy-950) 100%);
+  overflow: hidden;
+}
+.mobile-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.75rem 1rem; border-bottom: 1px solid var(--navy-700);
+  background: rgba(11, 21, 38, 0.8); backdrop-filter: blur(10px);
+  flex-shrink: 0; min-height: 50px;
+}
+.mobile-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.mobile-chat {
+  flex: 1; overflow-y: auto; padding: 1rem;
+  display: flex; flex-direction: column; gap: 1rem;
+}
+.mobile-msg { max-width: 88%; line-height: 1.5; font-size: 0.88rem; }
+.mobile-msg.user { align-self: flex-end; color: var(--amber-400); text-align: right; }
+.mobile-msg.bot { align-self: flex-start; color: var(--text-bright); }
+.mobile-input-zone {
+  padding: 0.75rem 1rem; border-top: 1px solid var(--navy-700);
+  background: rgba(6, 13, 26, 0.9); backdrop-filter: blur(10px); flex-shrink: 0;
+}
+.mobile-orb {
+  width: 72px; height: 72px; border-radius: 50%; border: none;
+  cursor: pointer; position: relative; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  display: flex; align-items: center; justify-content: center; touch-action: none;
+}
+.mobile-orb.idle { background: var(--navy-700); box-shadow: 0 0 0 3px var(--navy-800); }
+.mobile-orb.listening { background: var(--amber-500); box-shadow: 0 0 25px var(--amber-500); transform: scale(1.15); }
+.mobile-orb.thinking { background: var(--navy-400); animation: pulse 1.5s infinite; }
+.mobile-orb.wake { background: var(--navy-600); box-shadow: 0 0 12px var(--navy-400); }
+.mobile-text-row {
+  display: flex; gap: 0.5rem; background: var(--navy-800); padding: 0.4rem;
+  border-radius: 10px; border: 1px solid var(--navy-700); margin-top: 0.6rem;
+}
+.mobile-text-input {
+  flex: 1; background: transparent; border: none; color: white;
+  resize: none; outline: none; padding: 0.5rem; font-family: inherit; font-size: 0.9rem;
+}
+.mobile-send {
+  background: var(--amber-500); border: none; color: #0b1526; cursor: pointer;
+  padding: 0.5rem 1rem; border-radius: 8px; font-weight: 600; font-size: 0.8rem;
+}
+.mobile-tab-bar {
+  display: flex; border-top: 1px solid var(--navy-700);
+  background: rgba(6, 13, 26, 0.95); backdrop-filter: blur(10px);
+  flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.mobile-tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  padding: 0.5rem 0; background: none; border: none; cursor: pointer;
+  color: var(--text-dim); font-size: 0.55rem; font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.5px; text-transform: uppercase; gap: 2px;
+  transition: color 0.15s;
+}
+.mobile-tab .mtab-icon { font-size: 1.2rem; }
+.mobile-tab.active { color: var(--amber-400); }
+.mobile-status-dots {
+  display: flex; gap: 4px; align-items: center;
+}
+.mobile-status-dots .dot { width: 6px; height: 6px; }
+.mobile-section-scroll {
+  flex: 1; overflow-y: auto; padding: 1rem;
+  display: flex; flex-direction: column; gap: 1rem;
+}
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -143,9 +143,11 @@ views:
 
           **Create via voice:** "When soil moisture drops below 20%, start irrigation zone 1"
 
-      - type: entities
-        title: Farm Scenes
-        icon: mdi:palette
+      - type: entity-filter
+        card:
+          type: entities
+          title: Farm Scenes
+          icon: mdi:palette
         show_empty: false
         entities:
           - entity: scene.farm_morning_routine
@@ -154,28 +156,49 @@ views:
           - entity: scene.farm_all_irrigation_off
           - entity: scene.farm_all_off
           - entity: scene.farm_frost_protection
+        state_filter:
+          - operator: "!="
+            value: "unavailable"
 
-      - type: entities
-        title: Sky Automations — Irrigation
-        icon: mdi:water
+      - type: entity-filter
+        card:
+          type: entities
+          title: Sky Automations — Irrigation
+          icon: mdi:water
+        show_empty: false
         entities:
           - entity: automation.sky_auto_irrigate_low_moisture
           - entity: automation.sky_midday_irrigation_check
           - entity: automation.sky_timer_auto_off
+        state_filter:
+          - "on"
+          - "off"
 
-      - type: entities
-        title: Sky Automations — Lighting
-        icon: mdi:lightbulb
+      - type: entity-filter
+        card:
+          type: entities
+          title: Sky Automations — Lighting
+          icon: mdi:lightbulb
+        show_empty: false
         entities:
           - entity: automation.sky_dawn_barn_lights
           - entity: automation.sky_dusk_field_lights_off
+        state_filter:
+          - "on"
+          - "off"
 
-      - type: entities
-        title: Sky Automations — Safety & Alerts
-        icon: mdi:alert-circle
+      - type: entity-filter
+        card:
+          type: entities
+          title: Sky Automations — Safety & Alerts
+          icon: mdi:alert-circle
+        show_empty: false
         entities:
           - entity: automation.sky_frost_protection
           - entity: automation.sky_high_fungal_risk
+        state_filter:
+          - "on"
+          - "off"
 
       - type: entity-filter
         card:
@@ -192,24 +215,6 @@ views:
           - entity: automation.sky_voice_weekly_deep_water
           - entity: automation.sky_voice_humidity_fan
           - entity: automation.sky_voice_rain_irrigation_off
-        state_filter:
-          - "on"
-          - "off"
-
-      - type: entity-filter
-        card:
-          type: entities
-          title: All Other Automations
-          icon: mdi:cog
-        show_empty: false
-        entities:
-          - entity: automation.sky_timer_auto_off
-          - entity: automation.sky_auto_irrigate_low_moisture
-          - entity: automation.sky_frost_protection
-          - entity: automation.sky_dawn_barn_lights
-          - entity: automation.sky_dusk_field_lights_off
-          - entity: automation.sky_high_fungal_risk
-          - entity: automation.sky_midday_irrigation_check
         state_filter:
           - "on"
           - "off"

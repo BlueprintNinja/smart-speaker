@@ -5,7 +5,7 @@
 
 scene:
   - id: farm_morning_routine
-    name: "Morning Routine"
+    name: "Farm Morning Routine"
     icon: mdi:weather-sunset-up
     entities:
       input_boolean.irrigation_zone_1:
@@ -16,7 +16,7 @@ scene:
         state: "on"
 
   - id: farm_evening_mode
-    name: "Evening Mode"
+    name: "Farm Evening Mode"
     icon: mdi:weather-sunset-down
     entities:
       input_boolean.irrigation_zone_1:
@@ -31,7 +31,7 @@ scene:
         state: "on"
 
   - id: farm_all_irrigation_on
-    name: "All Irrigation On"
+    name: "Farm All Irrigation On"
     icon: mdi:water
     entities:
       input_boolean.irrigation_zone_1:
@@ -42,7 +42,7 @@ scene:
         state: "on"
 
   - id: farm_all_irrigation_off
-    name: "All Irrigation Off"
+    name: "Farm All Irrigation Off"
     icon: mdi:water-off
     entities:
       input_boolean.irrigation_zone_1:
@@ -68,7 +68,7 @@ scene:
         state: "off"
 
   - id: farm_frost_protection
-    name: "Frost Protection"
+    name: "Farm Frost Protection"
     icon: mdi:snowflake-alert
     entities:
       input_boolean.irrigation_zone_1:
