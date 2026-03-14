@@ -1,23 +1,32 @@
 # set-default-model.ps1
-# Updates OLLAMA_MODEL in .env to qwen3.5:4b with 4096 context
+# Updates OLLAMA_MODEL in .env to qwen3.5:4b
 # Usage: .\scripts\set-default-model.ps1
 
-$envFile = Join-Path $PSScriptRoot "..\\.env"
+$envFile = Join-Path $PSScriptRoot "..\.env"
+$exampleFile = Join-Path $PSScriptRoot "..\.env.example"
 
 if (-Not (Test-Path $envFile)) {
-    Write-Host "No .env file found at $envFile — copying from .env.example" -ForegroundColor Yellow
-    Copy-Item (Join-Path $PSScriptRoot "..\\.env.example") $envFile
+    Write-Host "No .env found, copying from .env.example" -ForegroundColor Yellow
+    Copy-Item $exampleFile $envFile
 }
 
-$content = Get-Content $envFile -Raw
+$lines = Get-Content $envFile
+$found = $false
+$output = @()
 
-if ($content -match "OLLAMA_MODEL=") {
-    $content = $content -replace "OLLAMA_MODEL=.*", "OLLAMA_MODEL=qwen3.5:4b"
-    Write-Host "Updated OLLAMA_MODEL to qwen3.5:4b" -ForegroundColor Green
-} else {
-    $content += "`nOLLAMA_MODEL=qwen3.5:4b`n"
-    Write-Host "Added OLLAMA_MODEL=qwen3.5:4b" -ForegroundColor Green
+foreach ($line in $lines) {
+    if ($line -match "^OLLAMA_MODEL=") {
+        $output += "OLLAMA_MODEL=qwen3.5:4b"
+        $found = $true
+    } else {
+        $output += $line
+    }
 }
 
-Set-Content $envFile $content -NoNewline
-Write-Host "Done. Run: docker compose up -d --build backend" -ForegroundColor Cyan
+if (-not $found) {
+    $output += "OLLAMA_MODEL=qwen3.5:4b"
+}
+
+$output | Set-Content $envFile
+Write-Host "OLLAMA_MODEL set to qwen3.5:4b" -ForegroundColor Green
+Write-Host "Now run: docker compose up -d --build backend" -ForegroundColor Cyan
