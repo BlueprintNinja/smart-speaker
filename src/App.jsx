@@ -543,6 +543,10 @@ export default function App() {
         const label = t.entity_id?.split(".")[1]?.replace(/_/g, " ") || t.entity_id;
         botMsg.timerInfo = { ...t, label };
         fetch(`${API}/alerts/timers`).then(r => r.json()).then(d => setActiveTimers(d.timers || [])).catch(() => {});
+        // Pulse canvas node for timer entity even if ha_result was empty
+        if (!data.ha_result && data.entity_id) {
+          setLastHaEvent({ ok: true, entity_id: data.entity_id });
+        }
       }
 
       setMessages(prev => [...prev, botMsg]);

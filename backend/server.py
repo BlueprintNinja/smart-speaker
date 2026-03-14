@@ -1109,6 +1109,19 @@ async def chat(body: dict):
         except Exception as e:
             ha_result = {"error": str(e)}
 
+    # If timer was set but no JSON command triggered the turn-on, do it now
+    if timer_info and ha_result is None:
+        t_eid = timer_info["entity_id"]
+        t_slug = t_eid.split(".", 1)[-1] if "." in t_eid else t_eid
+        t_domain = timer_info.get("domain", "input_boolean") if "domain" in (timer_info or {}) else "input_boolean"
+        print(f"[timer] Auto turn-on {t_eid} (no JSON command found)", flush=True)
+        try:
+            ha_result = await ha_call_service(t_domain, "turn_on", t_eid)
+            cmd_entity_id = t_eid
+        except Exception as e:
+            ha_result = {"error": str(e)}
+            cmd_entity_id = t_eid
+
     spoken = strip_command_block(full)
     spoken = strip_markdown_for_tts(spoken)
 
@@ -1124,6 +1137,9 @@ async def chat(body: dict):
         result["entity_id"] = cmd_entity_id
     if timer_info:
         result["timer"] = timer_info
+        # Ensure entity_id is always present when a timer is set
+        if "entity_id" not in result:
+            result["entity_id"] = timer_info["entity_id"]
 
     return JSONResponse(result)
 
