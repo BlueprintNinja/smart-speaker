@@ -5,7 +5,7 @@
 automation:
   # Auto-irrigate when soil moisture drops critically low
   - id: sky_auto_irrigate_low_moisture
-    alias: "Sky - Auto Irrigate on Low Soil Moisture"
+    alias: "Sky - Auto Irrigate Low Moisture"
     description: "Turns on zone 1 irrigation when soil moisture drops below 25%"
     trigger:
       - platform: numeric_state
@@ -96,7 +96,7 @@ automation:
 
   # High fungal risk alert — notify and log when risk exceeds 70%
   - id: sky_high_fungal_risk
-    alias: "Sky - High Fungal Risk Alert"
+    alias: "Sky - High Fungal Risk"
     description: "Alerts Sky when fungal risk exceeds 70%"
     trigger:
       - platform: numeric_state
@@ -114,7 +114,7 @@ automation:
 
   # Midday irrigation shutoff — safety: turn off all irrigation at 2 PM to prevent overwatering
   - id: sky_midday_irrigation_check
-    alias: "Sky - Midday Irrigation Safety Shutoff"
+    alias: "Sky - Midday Irrigation Check"
     description: "Ensures all irrigation is off by 2 PM to prevent overwatering"
     trigger:
       - platform: time

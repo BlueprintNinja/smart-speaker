@@ -7,11 +7,48 @@ input_boolean:
     name: "Sky Canvas Init"
     icon: mdi:canvas
     initial: false
+  # Seed farm devices so scenes/automations can reference them immediately.
+  # Canvas sync will manage these dynamically after first load.
+  irrigation_zone_1:
+    name: "Irrigation Zone 1"
+    icon: mdi:water
+    initial: false
+  irrigation_zone_2:
+    name: "Irrigation Zone 2"
+    icon: mdi:water
+    initial: false
+  irrigation_zone_3:
+    name: "Irrigation Zone 3"
+    icon: mdi:water
+    initial: false
+  light_barn:
+    name: "Barn Light"
+    icon: mdi:lightbulb
+    initial: false
+  light_field:
+    name: "Field Light"
+    icon: mdi:lightbulb
+    initial: false
 
 timer:
   sky_init:
     name: "Sky Timer Init"
     duration: "00:00:01"
+  sky_irrigation_zone_1:
+    name: "Sky Irrigation Zone 1"
+    duration: "00:30:00"
+  sky_irrigation_zone_2:
+    name: "Sky Irrigation Zone 2"
+    duration: "00:30:00"
+  sky_irrigation_zone_3:
+    name: "Sky Irrigation Zone 3"
+    duration: "00:20:00"
+  sky_light_barn:
+    name: "Sky Light Barn"
+    duration: "01:00:00"
+  sky_light_field:
+    name: "Sky Light Field"
+    duration: "01:00:00"
 
 # REST command for HA automations to notify the backend on timer expiry
 rest_command:
