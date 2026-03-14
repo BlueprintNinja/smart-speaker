@@ -130,6 +130,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[startup] Kokoro failed (non-fatal, TTS disabled): {e}", flush=True)
     print("[startup] Server accepting requests.", flush=True)
+    # Seed HA entity cache once at startup, then keep it warm in background
+    asyncio.ensure_future(_refresh_ha_cache())
+    async def _cache_loop():
+        while True:
+            await asyncio.sleep(60)
+            await _refresh_ha_cache()
+    asyncio.ensure_future(_cache_loop())
     yield
 
 
@@ -198,6 +205,23 @@ def _ollama_chat_stream(messages: list[dict], options: dict):
 
 # ── Conversation history ───────────────────────────────────────────────────────
 conversation: list[dict] = []
+
+# ── HA entity cache (refreshed in background every 60s) ───────────────────────
+_ha_entity_cache: list[dict] = []
+_ha_entity_cache_ts: float = 0.0
+
+async def _refresh_ha_cache():
+    global _ha_entity_cache, _ha_entity_cache_ts
+    try:
+        entities = await ha_list_entities()
+        if entities:
+            _ha_entity_cache = entities
+            _ha_entity_cache_ts = time.time()
+    except Exception:
+        pass
+
+def _get_cached_ha_entities() -> list[dict]:
+    return _ha_entity_cache
 
 # ── Sky Memory System ──────────────────────────────────────────────────────────
 MEMORY_PATH = Path("/app/data/sky_memory.json")
@@ -406,8 +430,8 @@ async def chat(body: dict):
     mem = _load_memory()
     mem_summary = _memory_summary(mem)
 
-    # Inject real HA entity list so LLM uses correct entity_ids
-    ha_entities = await ha_list_entities()
+    # Use cached HA entities — never block /chat on a live HA fetch
+    ha_entities = _get_cached_ha_entities()
     if ha_entities:
         ACTIONABLE_DOMAINS = {"light", "switch", "cover", "lock", "climate", "fan", "scene", "script", "automation", "input_boolean"}
         lines = []
