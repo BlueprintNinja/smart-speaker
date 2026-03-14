@@ -636,6 +636,71 @@ def strip_command_block(text: str) -> str:
     return text.strip()
 
 
+def extract_intent_fallback(llm_response: str, user_msg: str) -> tuple[dict | None, dict | None]:
+    """Deterministic fallback: extract HA command + timer from natural language
+    when the LLM doesn't emit structured JSON/TIMER tags.
+    Returns (command_dict_or_None, timer_dict_or_None)."""
+    text = (user_msg + " " + llm_response).lower()
+
+    # Detect turn-on / turn-off intent
+    is_off = any(kw in text for kw in ["turn off", "turning off", "shut off", "disable", "stop irrigat"])
+    is_on = any(kw in text for kw in [
+        "turn on", "turning on", "irrigat", "start irrigat", "water zone",
+        "enable", "activate",
+    ])
+    if not is_on and not is_off:
+        return None, None
+
+    service = "turn_off" if is_off else "turn_on"
+
+    # Try to find a canvas entity match
+    helpers = _load_canvas_helpers()
+    matched_slug = None
+    for slug in helpers:
+        # Match slug parts in the text (e.g., "irrigation zone 1" matches "irrigation_zone_1")
+        readable = slug.replace("_", " ")
+        if readable in text:
+            matched_slug = slug
+            break
+    # Broader match: "zone 1" → look for any slug ending with that
+    if not matched_slug:
+        zone_match = re.search(r"zone\s*(\d+)", text)
+        if zone_match:
+            zone_num = zone_match.group(1)
+            for slug in helpers:
+                if slug.endswith(f"zone_{zone_num}"):
+                    matched_slug = slug
+                    break
+    # Match light/switch names
+    if not matched_slug:
+        for slug in helpers:
+            readable = slug.replace("_", " ")
+            # Check if all words of the slug appear in the text
+            words = readable.split()
+            if len(words) >= 2 and all(w in text for w in words):
+                matched_slug = slug
+                break
+
+    if not matched_slug:
+        return None, None
+
+    entity_id = f"input_boolean.{matched_slug}"
+    cmd = {"action": f"input_boolean.{service}", "entity_id": entity_id}
+    print(f"[fallback] Extracted intent: {service} {entity_id} from natural language", flush=True)
+
+    # Extract duration for timer
+    timer = None
+    dur_match = re.search(r"(\d+)\s*(?:minute|min|hour|hr)", text)
+    if dur_match and service == "turn_on":
+        num = float(dur_match.group(1))
+        if "hour" in dur_match.group(0) or "hr" in dur_match.group(0):
+            num *= 60
+        timer = {"entity_id": entity_id, "minutes": num, "domain": "input_boolean"}
+        print(f"[fallback] Extracted timer: {entity_id} for {num} min", flush=True)
+
+    return cmd, timer
+
+
 def extract_timer(llm_response: str) -> dict | None:
     """Parse [TIMER: entity_id, minutes, domain] from LLM response."""
     match = re.search(r"\[TIMER:\s*([^,\]]+),\s*(\d+(?:\.\d+)?),\s*([^\]]+)\]", llm_response)
@@ -1119,6 +1184,22 @@ async def chat(body: dict):
             print(f"[chat] ha_call_service({domain}.{service}, {cmd_entity_id}) → {ha_result}", flush=True)
         except Exception as e:
             ha_result = {"error": str(e)}
+
+    # ── Fallback: deterministic intent extraction from natural language ──
+    if cmd is None and timer_info is None:
+        fb_cmd, fb_timer = extract_intent_fallback(full, user_msg)
+        if fb_cmd:
+            cmd = fb_cmd
+            cmd_entity_id = fb_cmd.get("entity_id", "")
+            try:
+                domain, service = fb_cmd["action"].split(".", 1)
+                ha_result = await ha_call_service(domain, service, cmd_entity_id)
+                print(f"[fallback] ha_call_service({domain}.{service}, {cmd_entity_id}) → {ha_result}", flush=True)
+            except Exception as e:
+                ha_result = {"error": str(e)}
+        if fb_timer:
+            timer_id = await schedule_timer(fb_timer["entity_id"], fb_timer["minutes"], fb_timer["domain"])
+            timer_info = {"entity_id": fb_timer["entity_id"], "minutes": fb_timer["minutes"], "timer_id": timer_id}
 
     # If timer was set but no JSON command triggered the turn-on, do it now
     if timer_info and ha_result is None:
