@@ -144,6 +144,7 @@ CRITICAL RULES:
 
 == CAMERA & SECURITY ==
   Barn camera: input_boolean.blink_barn_camera_armed
+  Vision analysis: the 📷 and 🖼 buttons in the UI allow Ray to send images — you will receive them via /vision endpoint.
   input_boolean.turn_on → arm camera, input_boolean.turn_off → disarm camera
   automation.sky_barn_camera_arm_dusk — enable/disable auto-arm at dusk
   automation.sky_barn_camera_disarm_dawn — enable/disable auto-disarm at dawn
@@ -178,7 +179,39 @@ CRITICAL RULES:
   extra: {"code": "1234"}  if required
 
 == NOTIFICATIONS ==
-  notify.notify  extra: {"message": "...", "title": "..."}
+  notify.persistent_notification  extra: {"message": "...", "title": "..."}  — creates visible alert in HA UI (no app required)
+  notify.mobile_app_*  — push to Ray's iPhone (requires HA Companion app)
+  Example: "remind me to spray tomorrow" →
+  ```json
+  {"action": "notify.persistent_notification", "entity_id": "", "extra": {"message": "Spray reminder: check spray window and Captan interval.", "title": "Farm Reminder"}}
+  ```
+
+== CALENDAR & SPRAY TRACKING ==
+  Read-only sensors (use FETCH_TREND or just report state):
+    sensor.days_since_captan_spray  — days since last Captan fungicide
+    sensor.days_since_swd_spray     — days since last Malathion (SWD) spray
+    sensor.days_until_harvest       — days until estimated harvest start
+    sensor.spray_schedule_status    — On Schedule / Due Soon / OVERDUE / Window Closed
+  Settable dates (use input_datetime.set_datetime service):
+    input_datetime.last_spray_captan      — log when Captan was last applied
+    input_datetime.last_spray_sulfur      — log Sulfur spray
+    input_datetime.last_spray_malathion   — log Malathion/SWD spray
+    input_datetime.harvest_start_estimate — set expected harvest date
+    input_datetime.last_pruning_date      — log pruning
+    input_datetime.next_trellis_inspection
+  Example: "I just sprayed Captan" →
+  ```json
+  {"action": "input_datetime.set_datetime", "entity_id": "input_datetime.last_spray_captan", "extra": {"date": "TODAY"}}
+  ```
+  Replace TODAY with the current date string (YYYY-MM-DD).
+  After logging, confirm verbally: "Got it Ray — I've logged today's Captan spray."
+
+== PRESENCE ==
+  input_boolean.ray_on_farm         — toggle when Ray is physically at the farm
+  input_select.ray_farm_activity    — set current task (General Inspection, Harvesting, Spraying, etc.)
+  sensor.farm_presence_status       — read current presence + activity
+  Example: "I'm heading to the farm" → turn on input_boolean.ray_on_farm
+  Example: "I'm starting to harvest" → set input_select.ray_farm_activity to Harvesting
 
 == GROUPS / ALL DEVICES / AREAS ==
   homeassistant.turn_on, homeassistant.turn_off  (works on groups, scenes, and areas)
@@ -3235,6 +3268,68 @@ async def get_briefing():
         "icon": "📷",
         "items": [f"Barn camera: {'Armed' if camera_armed == 'on' else 'Disarmed' if camera_armed == 'off' else 'Unknown'}"],
     })
+
+    # Calendar & Spray Tracking
+    cal_items = []
+    cal_spoken = []
+    if HA_TOKEN:
+        cal_sensors = [
+            ("sensor.spray_schedule_status", "Spray status"),
+            ("sensor.days_since_captan_spray", "Days since Captan"),
+            ("sensor.days_since_swd_spray", "Days since SWD spray"),
+            ("sensor.days_until_harvest", "Days until harvest"),
+        ]
+        for eid, label in cal_sensors:
+            try:
+                s = await ha_get_state(eid)
+                val = s.get("state", "unknown")
+                if val not in ("unknown", "unavailable"):
+                    unit = " days" if "days" in label.lower() else ""
+                    cal_items.append(f"{label}: {val}{unit}")
+                    if label == "Spray status" and val in ("OVERDUE", "Due Soon"):
+                        cal_spoken.append(f"Captan spray is {val.lower()}")
+                    if label == "Days until harvest":
+                        try:
+                            if int(val) <= 14:
+                                cal_spoken.append(f"harvest is {val} days away")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        # Next trellis inspection
+        try:
+            ni = await ha_get_state("input_datetime.next_trellis_inspection")
+            ni_val = ni.get("state", "")
+            if ni_val and ni_val not in ("unknown", "unavailable"):
+                cal_items.append(f"Next trellis inspection: {ni_val}")
+        except Exception:
+            pass
+    if cal_items:
+        sections.append({"title": "Calendar", "icon": "📅", "items": cal_items})
+    if cal_spoken:
+        spoken_parts.append("Calendar note: " + "; ".join(cal_spoken) + ".")
+
+    # Presence
+    presence_items = []
+    presence_spoken = ""
+    if HA_TOKEN:
+        try:
+            on_farm = await ha_get_state("input_boolean.ray_on_farm")
+            activity = await ha_get_state("input_select.ray_farm_activity")
+            on = on_farm.get("state") == "on"
+            act = activity.get("state", "Away")
+            presence_items = [
+                f"Ray on farm: {'Yes' if on else 'No'}",
+                f"Activity: {act}",
+            ]
+            if on:
+                presence_spoken = f"Ray is currently on the farm — {act}."
+        except Exception:
+            pass
+    if presence_items:
+        sections.append({"title": "Presence", "icon": "👤", "items": presence_items})
+    if presence_spoken:
+        spoken_parts.append(presence_spoken)
 
     # Compose full spoken text
     spoken = "Good morning, Ray. Here's your farm briefing. " + " ".join(spoken_parts)
