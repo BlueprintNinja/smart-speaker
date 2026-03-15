@@ -2759,29 +2759,33 @@ async def canvas_sync(body: dict):
     # Load previously synced helpers
     helpers = _load_canvas_helpers()
 
-    # Build set of current actionable slugs
+    # Build set of ALL current slugs (actionable + read-only)
     current_slugs: dict[str, dict] = {}  # slug → {name, icon, ntype}
     for node in nodes:
         ntype = node.get("type", "unknown")
         cfg = node.get("config", {})
         raw_id = cfg.get("entity_id") or f"canvas_{node.get('id', 'x')}"
-        if ntype in ACTIONABLE_NODE_TYPES and raw_id:
-            slug = raw_id.split(".", 1)[-1] if "." in raw_id else raw_id
-            friendly = cfg.get("friendly_name", slug.replace("_", " ").title())
-            current_slugs[slug] = {"name": friendly, "icon": DOMAIN_ICON.get(ntype, "mdi:toggle-switch"), "ntype": ntype}
+        if not raw_id:
+            continue
+        slug = raw_id.split(".", 1)[-1] if "." in raw_id else raw_id
+        friendly = cfg.get("friendly_name", slug.replace("_", " ").title())
+        current_slugs[slug] = {"name": friendly, "icon": DOMAIN_ICON.get(ntype, "mdi:toggle-switch"), "ntype": ntype}
 
     async with httpx.AsyncClient(timeout=10) as client:
         # ── 1. Delete helpers for removed nodes ──────────────────────────────
         removed_slugs = set(helpers.keys()) - set(current_slugs.keys())
         for slug in removed_slugs:
             config_id = helpers.pop(slug, None)
-            ok = await _ha_delete_input_boolean(client, slug, config_id or "")
-            if ok:
-                deleted += 1
-            # Also clean up the sensor.canvas_* state entry and any timer
+            # Delete input_boolean for actionable nodes (sensor_only entries skip this)
+            if config_id and config_id != "sensor_only":
+                ok = await _ha_delete_input_boolean(client, slug, config_id)
+                if ok:
+                    deleted += 1
+            # Always clean up sensor.canvas_* state entry and any timer
             for cleanup_eid in [f"sensor.canvas_{slug}", f"timer.sky_{slug}"]:
                 try:
                     await client.delete(f"{HA_URL}/api/states/{cleanup_eid}", headers=_ha_headers())
+                    print(f"[canvas_sync] Deleted {cleanup_eid} from HA", flush=True)
                 except Exception:
                     pass
 
@@ -2819,6 +2823,10 @@ async def canvas_sync(body: dict):
             slug = raw_id.split(".", 1)[-1] if "." in raw_id else raw_id
 
             canvas_id = f"sensor.canvas_{slug}"
+
+            # Track read-only slugs so they can be cleaned up on future removal
+            if ntype not in ACTIONABLE_NODE_TYPES and slug not in helpers:
+                helpers[slug] = "sensor_only"
 
             # For actionable nodes, the controllable entity is input_boolean.{slug}
             controllable_eid = f"input_boolean.{slug}" if ntype in ACTIONABLE_NODE_TYPES else ""
