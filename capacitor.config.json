@@ -1,0 +1,24 @@
+{
+  "appId": "com.raysberryfarm.sky",
+  "appName": "Sky — Farm Assistant",
+  "webDir": "dist",
+  "server": {
+    "url": "https://YOUR-PC-IP",
+    "cleartext": false,
+    "allowNavigation": ["*"]
+  },
+  "ios": {
+    "scheme": "Sky",
+    "backgroundColor": "#060d1a",
+    "contentInset": "always",
+    "preferredContentMode": "mobile",
+    "scrollEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#060d1a",
+      "showSpinner": false
+    }
+  }
+}

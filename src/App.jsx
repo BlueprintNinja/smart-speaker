@@ -33,10 +33,17 @@ body {
   color: var(--text-bright);
   font-family: 'Inter', sans-serif;
   overflow: hidden;
+  /* iOS safe areas */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .app-container {
-  display: flex; height: 100vh; width: 100vw;
+  display: flex;
+  height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  width: 100vw;
   background: radial-gradient(circle at 50% 50%, var(--navy-900) 0%, var(--navy-950) 100%);
 }
 

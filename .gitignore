@@ -44,3 +44,11 @@ ha-config/
 
 # Farm knowledge source doc — too large/binary for repo; curated yaml is committed instead
 RaysBerryFarmEnhancedPhased.docx
+
+# iOS / Capacitor build artifacts — keep ios/ project, ignore build output
+ios/App/App/public/
+ios/App/Pods/
+ios/App/DerivedData/
+ios/.build/
+*.xcuserdatad/
+xcuserdata/
