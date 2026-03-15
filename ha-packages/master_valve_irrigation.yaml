@@ -20,8 +20,8 @@ template:
         unique_id: blackberry_row_status
         icon: mdi:fruit-cherries
         state: >
-          {% set v1 = states('switch.tuya_master_valve_1') %}
-          {% set v2 = states('switch.tuya_master_valve_2') %}
+          {% set v1 = states('input_boolean.tuya_master_valve_1') %}
+          {% set v2 = states('input_boolean.tuya_master_valve_2') %}
           {% set t = now().strftime('%H:%M') %}
           {% if v1 == 'off' and v2 == 'off' %} Idle
           {% elif '06:00' <= t < '07:00' %} Watering Rows 1-4 (Timer A)
@@ -30,8 +30,8 @@ template:
           {% else %} Idle
           {% endif %}
         attributes:
-          valve_1: "{{ states('switch.tuya_master_valve_1') }}"
-          valve_2: "{{ states('switch.tuya_master_valve_2') }}"
+          valve_1: "{{ states('input_boolean.tuya_master_valve_1') }}"
+          valve_2: "{{ states('input_boolean.tuya_master_valve_2') }}"
           soil_moisture: "{{ states('sensor.rainpoint_soil_moisture') }}%"
           soil_status: "{{ states('sensor.soil_moisture_status') }}"
           total_zones: 8
@@ -69,14 +69,14 @@ automation:
                  states('sensor.rainpoint_soil_moisture') | float(0) <
                  states('input_number.rainpoint_wet_threshold') | float(75) }}
     action:
-      - service: switch.turn_on
+      - service: input_boolean.turn_on
         target:
           entity_id:
-            - switch.tuya_master_valve_1
-            - switch.tuya_master_valve_2
+            - input_boolean.tuya_master_valve_1
+            - input_boolean.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.tuya_master_valve_1"
+          sensor: "input_boolean.tuya_master_valve_1"
           state: "on"
           message: >
             Both Tuya valve outlets opened — daily blackberry irrigation starting.
@@ -85,14 +85,14 @@ automation:
             (threshold: {{ states('input_number.rainpoint_wet_threshold') }}%).
           severity: "info"
       - delay: "02:25:00"
-      - service: switch.turn_off
+      - service: input_boolean.turn_off
         target:
           entity_id:
-            - switch.tuya_master_valve_1
-            - switch.tuya_master_valve_2
+            - input_boolean.tuya_master_valve_1
+            - input_boolean.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.tuya_master_valve_1"
+          sensor: "input_boolean.tuya_master_valve_1"
           state: "off"
           message: "Both Tuya valve outlets closed — daily irrigation cycle complete (8 zones × 15min)."
           severity: "info"
@@ -123,7 +123,7 @@ automation:
     action:
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.tuya_master_valve_1"
+          sensor: "input_boolean.tuya_master_valve_1"
           state: "skipped"
           message: >
             Daily irrigation skipped —
@@ -132,6 +132,47 @@ automation:
             Soil moisture: {{ states('sensor.rainpoint_soil_moisture') }}%
             (wet threshold: {{ states('input_number.rainpoint_wet_threshold') }}%).
           severity: "info"
+
+  # Bridge: mirror input_boolean state to real Tuya switch when hardware is connected.
+  # This automation fires whenever the placeholder is toggled and forwards the command
+  # to the physical switch if it exists in HA (i.e. Tuya integration is active).
+  - id: sky_giex_valve_bridge_on
+    alias: "Sky - GIEX Valve Bridge (ON)"
+    description: "Mirrors input_boolean.tuya_master_valve_* to switch.tuya_master_valve_* when hardware is connected."
+    mode: parallel
+    trigger:
+      - platform: state
+        entity_id:
+          - input_boolean.tuya_master_valve_1
+          - input_boolean.tuya_master_valve_2
+        to: "on"
+    condition:
+      - condition: template
+        value_template: >
+          {{ states(trigger.entity_id | replace('input_boolean.', 'switch.')) not in ['unknown', 'unavailable'] }}
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: "{{ trigger.entity_id | replace('input_boolean.', 'switch.') }}"
+
+  - id: sky_giex_valve_bridge_off
+    alias: "Sky - GIEX Valve Bridge (OFF)"
+    description: "Mirrors input_boolean.tuya_master_valve_* to switch.tuya_master_valve_* when hardware is connected."
+    mode: parallel
+    trigger:
+      - platform: state
+        entity_id:
+          - input_boolean.tuya_master_valve_1
+          - input_boolean.tuya_master_valve_2
+        to: "off"
+    condition:
+      - condition: template
+        value_template: >
+          {{ states(trigger.entity_id | replace('input_boolean.', 'switch.')) not in ['unknown', 'unavailable'] }}
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: "{{ trigger.entity_id | replace('input_boolean.', 'switch.') }}"
 
 # ── Script: Manual Blackberry Watering (30min override) ─────────────────────
 script:
@@ -147,27 +188,27 @@ script:
     sequence:
       - variables:
           run_duration: "{{ duration_minutes | default(30) | int }}"
-      - service: switch.turn_on
+      - service: input_boolean.turn_on
         target:
           entity_id:
-            - switch.tuya_master_valve_1
-            - switch.tuya_master_valve_2
+            - input_boolean.tuya_master_valve_1
+            - input_boolean.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.tuya_master_valve_1"
+          sensor: "input_boolean.tuya_master_valve_1"
           state: "manual_on"
           message: "Manual watering started — both Tuya outlets open for {{ run_duration }} minutes."
           severity: "info"
       - delay:
           minutes: "{{ run_duration }}"
-      - service: switch.turn_off
+      - service: input_boolean.turn_off
         target:
           entity_id:
-            - switch.tuya_master_valve_1
-            - switch.tuya_master_valve_2
+            - input_boolean.tuya_master_valve_1
+            - input_boolean.tuya_master_valve_2
       - service: rest_command.sky_alert
         data:
-          sensor: "switch.tuya_master_valve_1"
+          sensor: "input_boolean.tuya_master_valve_1"
           state: "manual_off"
           message: "Manual watering complete — both Tuya outlets closed after {{ run_duration }} minutes."
           severity: "info"

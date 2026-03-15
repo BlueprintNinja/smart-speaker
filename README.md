@@ -1,12 +1,15 @@
-# Smart Speaker — Home & Farm Voice Assistant
+# Sky — AI Farm Assistant
 
-Voice-driven home/farm automation assistant powered by:
+Voice-driven farm automation assistant for Ray's Berry Farm, powered by:
 - **Whisper** (faster-whisper) — speech-to-text, GPU accelerated with CPU fallback
 - **Ollama** — local LLM with structured command extraction (supports thinking models)
 - **Kokoro TTS** (`af_sky` voice) — text-to-speech, auto-downloads on first run
-- **Home Assistant** — controls lights, switches, locks, irrigation, sensors, timers, and more
-- **Node Canvas** — visual device map with live HA entity sync, active glow, and auto-off timers
+- **Home Assistant** — controls lights, switches, valves, irrigation, sensors, scenes, timers, and automations
+- **Device Grid** — live farm device cards with HA sync status and manual ON/OFF toggles
 - **Farm Bridge** — real-time farm intelligence from Open-Meteo + NWS weather data
+- **Scheduler** — visual daily/weekly farm automation schedule with live HA state
+
+> For full physical and software setup instructions see **[SETUP.md](./SETUP.md)**
 
 ---
 
@@ -130,44 +133,47 @@ Tracks Sky's farm recommendations and their outcomes:
 - **Morning Digest** — auto-generated briefing on page load, replayable via TTS
 - Manual digest trigger button
 
-### Node Canvas (⬡ SHOW NODES)
-Build a visual map of your devices with live HA integration:
+### Device Grid (⚙ SHOW DEVICES)
 
-1. Drag node types from the left palette onto the canvas
-2. Fill in each node's `entity_id` and friendly name
-3. Connect nodes by dragging from output port → input port
-4. **Nodes sync to HA automatically** as `sensor.canvas_*` + `input_boolean.*` entities
-5. **Live entity status** in the collapsible HA Entities panel (✓ in HA, on/off state)
-6. **Active glow** — nodes glow green while their entity is "on" (polled every 5s)
-7. **Pulse animation** — nodes pulse when a chat command targets them
-8. **Timed commands** — "irrigate zone 1 for 30 minutes" creates an HA-native timer with auto-off
-9. **Dynamic Lovelace** — canvas sync automatically updates the HA Lovelace dashboard with new entities
+Click **⚙ SHOW DEVICES** in the chat input area to open the slide-out device panel:
 
-**Available node types:**
-- 💡 **Light** — on/off control via HA input_boolean
-- 📷 **Camera** — snapshot, motion detection placeholders
-- 💧 **Tensiometer** — soil moisture sensor with kPa threshold
-- 🌊 **Irrigation** — valve control with default duration + HA timer auto-off
-- 🌱 **RainPoint BLE** — Bluetooth soil moisture/temp with ESP32 proxy integration notes
+- **Live state** — each card polls HA every 5 seconds (on/off/unavailable/numeric)
+- **HA sync badge** — ✓ SYNCED / ? NOT FOUND / ⚠ UNAVAIL on every card
+- **ON/OFF toggles** — available on lights, switches, valves, fans, covers, scenes, automations
+- **Active glow** — cards glow green when entity state is "on"
+- **Pulse animation** — card pulses when Sky sends a command to that device
+- **Add/Remove** — click `+` card to add any HA entity; hover card to remove
+- **Syncs to HA** — device list calls `/canvas/sync` on change to register entities
+- Persists across refreshes via `localStorage`
 
-Nodes and connections persist across page refreshes via localStorage.
+### Schedule Tab (📅)
 
-### Collapsible Panels
-- **Left sidebar** — click ◀/▶ to collapse/expand. Tab icons remain accessible when collapsed.
-- **HA Entities panel** — click ◀/▶ to collapse for maximum canvas space.
+Farm automation schedule with two views:
+
+- **Daily** — timeline sorted by time, color-coded by category (irrigation/lighting/alert)
+  - Each event shows duration, conditions, last triggered time
+  - **ON/OFF toggle** to enable/disable each HA automation live
+- **Weekly** — 7-column grid with today highlighted
+- **Sun bar** — live sunrise/sunset times from HA
+- **Active timers** — pill badges when any HA timer is running
+- **Category filter** — All / 🌊 Irrigation / 💡 Lighting / ⚠ Alert
+- Polls `/schedule` every 15 seconds
+
+### Collapsible Sidebar
+- Click ◀/▶ to collapse/expand. Tab icons remain accessible when collapsed.
 
 ---
 
 ## Home Assistant Integration
 
-### Canvas → HA Entity Lifecycle
+### Device Grid → HA Entity Lifecycle
 
-When you add a node to the canvas:
+When devices are pinned to the Device Grid:
 1. **`sensor.canvas_{slug}`** is created as a read-only status sensor
-2. **`input_boolean.{slug}`** is created as a real HA helper (responds to services)
-3. **`timer.sky_{slug}`** is created on demand when a timed command is issued
-4. All three appear in the **Lovelace dashboard** automatically (dynamic update via HA REST API)
-5. When the node is removed from the canvas, all associated entities are cleaned up
+2. **`input_boolean.{slug}`** is created as a real HA helper (for actionable entities — lights, switches)
+3. **`timer.sky_{slug}`** is created on demand when Sky issues a timed command
+4. All entities appear in the **Lovelace dashboard** automatically (dynamic update via HA REST API)
+5. Sync fires automatically whenever the device list changes
 
 ### HA-Native Timers
 
@@ -201,11 +207,29 @@ Sky has access to several backend tools triggered by special tags in the LLM res
 - **`[TIMER: entity_id, minutes, domain]`** — schedules an HA-native timer with auto-off
 - **JSON command blocks** — structured HA service calls embedded in the response
 
+### Farm Scenes
+
+Pre-built scenes activatable by voice or from the Device Grid:
+
+| Scene | Action |
+|---|---|
+| `farm_morning_routine` | Irrigation zone 1 on, barn + field lights on |
+| `farm_evening_mode` | Irrigation off, field light off, barn on |
+| `farm_all_irrigation_on/off` | All zones on or off |
+| `farm_frost_protection` | All irrigation + barn light on |
+| `farm_deep_water` | Both GIEX valves + all zones on |
+| `farm_quick_rinse` | Both GIEX valves on (dust/heat rinse) |
+| `farm_emergency_shutoff` | Everything off immediately |
+
 ### HA Packages
 
-All HA configuration is in `ha-packages/` and copied to HA via the patch script:
+All HA configuration is in `ha-packages/` — see [SETUP.md](./SETUP.md) for full details.
 
-- **`smart_speaker_helpers.yaml`** — seeds input_boolean + timer integrations, generic timer auto-off automation, REST command for backend alerts
+Key files:
+- **`smart_speaker_helpers.yaml`** — input_boolean + timer helpers, timer auto-off automation, REST command
+- **`master_valve_irrigation.yaml`** — GIEX dual-zone valve, daily gatekeeper, weather-skip, manual watering script
+- **`farm_scenes.yaml`** — all farm scenes including Deep Water, Quick Rinse, Emergency Shutoff
+- **`farm_automations_advanced.yaml`** — auto-irrigate, frost protection, dawn/dusk lights, fungal risk
 - **`farm_bridge_automations.yaml`** — HA automations that POST to `/alert` when farm sensor thresholds are crossed
 - **`rainpoint.yaml`** — RainPoint BLE soil sensor template sensors, thresholds, and automations
 
@@ -236,11 +260,12 @@ docker volume ls | findstr model-cache
 
 The `HF_HOME` environment variable in `docker-compose.yml` points to `/app/.cache/huggingface` which is mounted from this volume.
 
-### Canvas Entities Not Appearing in HA
+### Device Cards Showing "? NOT FOUND"
 
 1. Ensure packages are installed: `.\scripts\patch-ha-config.ps1`
 2. Restart HA: `docker compose restart homeassistant`
 3. Check backend logs for sync errors: `docker compose logs backend --tail 20`
+4. Verify the entity exists in HA: Developer Tools → States → search the entity_id
 
 ### Deep Think Required for Commands
 
@@ -319,8 +344,11 @@ FastAPI Backend (Docker, GPU, port 8000)
     ├── /memory             → GET/POST/DELETE persistent farm memory
     ├── /memory/decisions   → Decision journal + outcome tracking
     ├── /memory/outcome     → Log outcomes against recommendations
-    ├── /canvas/sync        → Push nodes → HA entities + Lovelace update
+    ├── /canvas/sync        → Push device list → HA entities + Lovelace update
+    ├── /schedule           → Farm automation schedule with live HA state
+    ├── /schedule/toggle    → Enable/disable automation from UI
     ├── /ha/entities        → Cached HA entity list (60s refresh)
+    ├── /ha/service         → Direct HA service call (manual device toggles)
     ├── /ha/trend/{id}      → Historical sensor stats (min/max/mean/delta)
     ├── /alerts/timers      → Active timer list
     ├── /alerts/pending     → Pending alert queue
