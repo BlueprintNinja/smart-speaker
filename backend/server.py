@@ -3003,36 +3003,86 @@ async def get_briefing():
     sections = []
     spoken_parts = []
 
-    # Weather
-    weather_state = "unknown"
-    weather_temp = None
+    # Weather — prefer farm bridge sensors; fall back to weather.home; then Open-Meteo
+    growth_stage = "Unknown"
+    vpd_status = ""
+    frost_risk = ""
+    soil_temp = None
     rain_today = 0
     rain_tomorrow = 0
+    nws_alert_count = 0
+
     if HA_TOKEN:
         try:
+            gs = await ha_get_state("sensor.farm_growth_stage")
+            growth_stage = gs.get("state", "Unknown")
+        except Exception:
+            pass
+        try:
+            vs = await ha_get_state("sensor.farm_vpd_status")
+            vpd_status = vs.get("state", "")
+        except Exception:
+            pass
+        try:
+            fr = await ha_get_state("sensor.farm_frost_risk")
+            frost_risk = fr.get("state", "")
+        except Exception:
+            pass
+        try:
+            st = await ha_get_state("sensor.farm_soil_temp")
+            soil_temp = st.get("state")
+        except Exception:
+            pass
+        try:
+            na = await ha_get_state("sensor.farm_nws_alerts")
+            nws_alert_count = int(float(na.get("state", 0)))
+        except Exception:
+            pass
+        # Try weather.home for rain forecast first
+        try:
             w = await ha_get_state("weather.home")
-            weather_state = w.get("state", "unknown")
-            attrs = w.get("attributes", {})
-            weather_temp = attrs.get("temperature")
-            fc = attrs.get("forecast", [])
-            rain_today = fc[0].get("precipitation_probability", 0) if len(fc) > 0 else 0
-            rain_tomorrow = fc[1].get("precipitation_probability", 0) if len(fc) > 1 else 0
+            if w.get("state") not in ("unknown", "unavailable", None):
+                fc = (w.get("attributes") or {}).get("forecast", [])
+                rain_today = fc[0].get("precipitation_probability", 0) if len(fc) > 0 else 0
+                rain_tomorrow = fc[1].get("precipitation_probability", 0) if len(fc) > 1 else 0
         except Exception:
             pass
 
-    sections.append({
-        "title": "Weather",
-        "icon": "🌤",
-        "items": [
-            f"Conditions: {weather_state.replace('_', ' ').title()}",
-            f"Temperature: {weather_temp}°F" if weather_temp else "Temperature: unknown",
-            f"Rain today: {rain_today}%",
-            f"Rain tomorrow: {rain_tomorrow}%",
-        ],
-    })
+    # Open-Meteo fallback for rain probability if weather.home unavailable
+    if rain_today == 0 and rain_tomorrow == 0:
+        try:
+            FARM_LAT, FARM_LON = 39.09, -90.33
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(
+                    f"https://api.open-meteo.com/v1/forecast"
+                    f"?latitude={FARM_LAT}&longitude={FARM_LON}"
+                    f"&daily=precipitation_probability_max&forecast_days=2&timezone=auto"
+                )
+                fc_data = r.json().get("daily", {})
+                probs = fc_data.get("precipitation_probability_max", [0, 0])
+                rain_today = probs[0] if len(probs) > 0 else 0
+                rain_tomorrow = probs[1] if len(probs) > 1 else 0
+        except Exception:
+            pass
+
+    weather_items = [
+        f"Growth stage: {growth_stage}",
+        f"Soil temp: {soil_temp}°F" if soil_temp and soil_temp not in ("unknown", "unavailable") else "Soil temp: unavailable",
+        f"Rain today: {rain_today}%",
+        f"Rain tomorrow: {rain_tomorrow}%",
+    ]
+    if vpd_status and vpd_status not in ("unknown", "unavailable"):
+        weather_items.insert(1, f"VPD: {vpd_status}")
+    if frost_risk and frost_risk not in ("unknown", "unavailable", "None", "Low"):
+        weather_items.append(f"⚠ Frost risk: {frost_risk}")
+    if nws_alert_count > 0:
+        weather_items.insert(0, f"⚠ {nws_alert_count} active NWS alert{'s' if nws_alert_count > 1 else ''}")
+
+    sections.append({"title": "Weather", "icon": "🌤", "items": weather_items})
     spoken_parts.append(
-        f"Weather is {weather_state.replace('_', ' ')} with {rain_today}% chance of rain today"
+        f"Growth stage is {growth_stage}, with {rain_today}% chance of rain today"
         + (f" and {rain_tomorrow}% tomorrow" if rain_tomorrow > 20 else "") + "."
+        + (f" {nws_alert_count} active weather alert{'s' if nws_alert_count > 1 else ''}." if nws_alert_count > 0 else "")
     )
 
     # Soil & Irrigation

@@ -315,6 +315,8 @@ export default function App() {
   // Farm briefing (structured, from /briefing endpoint)
   const [briefing, setBriefing] = useState(null);
   const [briefingExpanded, setBriefingExpanded] = useState(false);
+  // Latest farm intelligence brief (from primeFarm criticals — shown in sidebar, NOT chat)
+  const [farmBrief, setFarmBrief] = useState(null);
   // Feature 3: decisions
   const [decisions, setDecisions] = useState([]);
   const [outcomeInput, setOutcomeInput] = useState({});
@@ -596,7 +598,7 @@ export default function App() {
       const data = await res.json();
 
       if (data.brief) {
-        setMessages(prev => [...prev, { role: "bot", text: `🌿 ${data.brief}`, isFarmBrief: true }]);
+        setFarmBrief({ text: data.brief, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
       }
     } catch (e) {
       console.warn("Farm prime failed:", e);
@@ -1483,6 +1485,21 @@ export default function App() {
                     <span style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>{briefingExpanded ? '▲' : '▼'}</span>
                   </div>
                 </div>
+                {briefingExpanded && farmBrief && (
+                  <div style={{ padding: '0.35rem 0.6rem', borderBottom: '1px solid rgba(245,158,11,0.2)',
+                    background: 'rgba(245,158,11,0.06)' }}>
+                    <div style={{ fontSize: '0.58rem', color: 'var(--amber-400)', marginBottom: '0.2rem', letterSpacing: '0.5px' }}>
+                      🌿 FARM INTELLIGENCE · {farmBrief.timestamp}
+                    </div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-bright)', lineHeight: '1.5' }}>
+                      {farmBrief.text}
+                    </div>
+                    <button onClick={e => { e.stopPropagation(); playTTS(farmBrief.text); }}
+                      style={{ marginTop: '0.25rem', background: 'transparent', border: '1px solid rgba(245,158,11,0.3)',
+                        color: 'var(--amber-400)', fontSize: '0.58rem', padding: '1px 6px',
+                        borderRadius: '4px', cursor: 'pointer' }}>▶ Play</button>
+                  </div>
+                )}
                 {briefingExpanded && briefing.sections.map((sec, i) => (
                   <div key={i} style={{ padding: '0.35rem 0.6rem', borderBottom: i < briefing.sections.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
                     <div style={{ fontSize: '0.58rem', color: 'var(--amber-400)', marginBottom: '0.2rem', letterSpacing: '0.5px' }}>
@@ -1495,8 +1512,10 @@ export default function App() {
                   </div>
                 ))}
                 {!briefingExpanded && (
-                  <div style={{ padding: '0.25rem 0.6rem 0.35rem', fontSize: '0.62rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                    {briefing.sections[0]?.items[0] || 'Tap to expand'}
+                  <div style={{ padding: '0.25rem 0.6rem 0.35rem', fontSize: '0.62rem',
+                    color: farmBrief ? 'var(--amber-400)' : 'var(--text-dim)', fontStyle: 'italic',
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {farmBrief ? `🌿 ${farmBrief.text}` : (briefing.sections[0]?.items[0] || 'Tap to expand')}
                   </div>
                 )}
               </div>
