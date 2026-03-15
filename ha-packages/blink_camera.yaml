@@ -1,0 +1,89 @@
+# Blink Outdoor Camera — Barn Cam
+# Ray's Berry Farm
+#
+# Hardware: Blink Outdoor Camera (WiFi, battery-powered)
+#           Mounted at barn — covers blackberry rows + equipment area
+#
+# Placeholder logic: input_boolean for armed/disarmed state,
+# template sensors for status until the Blink HA integration is connected.
+# Once the integration is active, real camera.blink_barn entities replace these.
+
+input_boolean:
+  blink_barn_camera_armed:
+    name: "Barn Camera Armed"
+    icon: mdi:cctv
+    initial: true
+
+# ── Template Sensors ─────────────────────────────────────────────────────────
+template:
+  - sensor:
+      - name: "Barn Camera Status"
+        unique_id: barn_camera_status
+        icon: mdi:cctv
+        state: >
+          {% if is_state('input_boolean.blink_barn_camera_armed', 'on') %}
+            Armed
+          {% else %}
+            Disarmed
+          {% endif %}
+        attributes:
+          armed: "{{ states('input_boolean.blink_barn_camera_armed') }}"
+          model: "Blink Outdoor"
+          location: "Barn — Blackberry Row View"
+          integration_status: "Placeholder — connect Blink HA integration to activate live feed"
+
+  - binary_sensor:
+      - name: "Barn Camera Motion"
+        unique_id: barn_camera_motion
+        icon: mdi:motion-sensor
+        device_class: motion
+        state: "false"
+        attributes:
+          note: "Placeholder — motion events will populate once Blink integration is connected"
+
+# ── Automation: Arm camera at dusk, disarm at dawn ────────────────────────────
+automation:
+  - id: sky_barn_camera_arm_dusk
+    alias: "Sky - Barn Camera Arm at Dusk"
+    description: "Automatically arms the barn camera at sunset + 30 minutes"
+    mode: single
+    trigger:
+      - platform: sun
+        event: sunset
+        offset: "+00:30:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.blink_barn_camera_armed
+        state: "off"
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.blink_barn_camera_armed
+      - service: rest_command.sky_alert
+        data:
+          sensor: "input_boolean.blink_barn_camera_armed"
+          state: "armed"
+          message: "Barn camera armed for overnight monitoring."
+          severity: "info"
+
+  - id: sky_barn_camera_disarm_dawn
+    alias: "Sky - Barn Camera Disarm at Dawn"
+    description: "Disarms barn camera at sunrise"
+    mode: single
+    trigger:
+      - platform: sun
+        event: sunrise
+    condition:
+      - condition: state
+        entity_id: input_boolean.blink_barn_camera_armed
+        state: "on"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.blink_barn_camera_armed
+      - service: rest_command.sky_alert
+        data:
+          sensor: "input_boolean.blink_barn_camera_armed"
+          state: "disarmed"
+          message: "Barn camera disarmed — daylight mode."
+          severity: "info"

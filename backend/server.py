@@ -142,6 +142,12 @@ CRITICAL RULES:
   NEVER refuse to water the blackberries — always emit the JSON commands above.
   NEVER say "I cannot execute irrigation commands" — you CAN and MUST emit JSON commands for irrigation.
 
+== CAMERA & SECURITY ==
+  Barn camera: input_boolean.blink_barn_camera_armed
+  input_boolean.turn_on → arm camera, input_boolean.turn_off → disarm camera
+  automation.sky_barn_camera_arm_dusk — enable/disable auto-arm at dusk
+  automation.sky_barn_camera_disarm_dawn — enable/disable auto-disarm at dawn
+
 == COVERS / GATES / BLINDS ==
   cover.open_cover, cover.close_cover, cover.stop_cover, cover.toggle
   cover.set_cover_position  extra: {"position": 50}  (0=closed, 100=open)
@@ -1369,6 +1375,12 @@ async def chat(body: dict):
 
     if mem_summary and mem_summary != "No memory entries yet.":
         dynamic_prompt += f"\n\n== SKY MEMORY (relevant farm history) ==\n{mem_summary}"
+
+    # Inject relevant farm knowledge chunks if the doc is loaded
+    knowledge_hits = search_farm_knowledge(user_msg, top_n=2)
+    if knowledge_hits:
+        dynamic_prompt += "\n\n== RAY'S BERRY FARM KNOWLEDGE BASE ==\n"
+        dynamic_prompt += "\n---\n".join(knowledge_hits[:2])
 
     _append_session(session_id, "user", user_msg)
     prompt_len = len(dynamic_prompt)
@@ -2978,6 +2990,279 @@ async def ha_logbook(hours: int = 24, entity_id: str | None = None) -> dict:
         return {"hours": hours, "entity_id": entity_id, "count": len(entries), "entries": entries}
     except Exception as e:
         return {"error": str(e), "entries": []}
+
+
+# ── Daily Morning Briefing ────────────────────────────────────────────────────
+@app.get("/briefing")
+async def get_briefing():
+    """
+    Assemble a daily farm briefing from live HA + weather data.
+    Returns structured sections + a single spoken text string for TTS.
+    Called by the sidebar briefing panel.
+    """
+    sections = []
+    spoken_parts = []
+
+    # Weather
+    weather_state = "unknown"
+    weather_temp = None
+    rain_today = 0
+    rain_tomorrow = 0
+    if HA_TOKEN:
+        try:
+            w = await ha_get_state("weather.home")
+            weather_state = w.get("state", "unknown")
+            attrs = w.get("attributes", {})
+            weather_temp = attrs.get("temperature")
+            fc = attrs.get("forecast", [])
+            rain_today = fc[0].get("precipitation_probability", 0) if len(fc) > 0 else 0
+            rain_tomorrow = fc[1].get("precipitation_probability", 0) if len(fc) > 1 else 0
+        except Exception:
+            pass
+
+    sections.append({
+        "title": "Weather",
+        "icon": "🌤",
+        "items": [
+            f"Conditions: {weather_state.replace('_', ' ').title()}",
+            f"Temperature: {weather_temp}°F" if weather_temp else "Temperature: unknown",
+            f"Rain today: {rain_today}%",
+            f"Rain tomorrow: {rain_tomorrow}%",
+        ],
+    })
+    spoken_parts.append(
+        f"Weather is {weather_state.replace('_', ' ')} with {rain_today}% chance of rain today"
+        + (f" and {rain_tomorrow}% tomorrow" if rain_tomorrow > 20 else "") + "."
+    )
+
+    # Soil & Irrigation
+    soil_pct = None
+    soil_status = "Unknown"
+    valve1 = "off"
+    valve2 = "off"
+    wet_threshold = 75
+    if HA_TOKEN:
+        try:
+            sm = await ha_get_state("sensor.rainpoint_soil_moisture")
+            soil_pct = sm.get("state")
+            ss = await ha_get_state("sensor.soil_moisture_status")
+            soil_status = ss.get("state", "Unknown")
+            v1 = await ha_get_state("input_boolean.tuya_master_valve_1")
+            valve1 = v1.get("state", "off")
+            v2 = await ha_get_state("input_boolean.tuya_master_valve_2")
+            valve2 = v2.get("state", "off")
+            wt = await ha_get_state("input_number.rainpoint_wet_threshold")
+            wet_threshold = wt.get("state", 75)
+        except Exception:
+            pass
+
+    irrigation_active = valve1 == "on" or valve2 == "on"
+    irrigation_skip = (
+        rain_today >= 40
+        or (soil_pct not in (None, "unknown", "unavailable") and float(soil_pct or 0) >= float(wet_threshold))
+    )
+    sections.append({
+        "title": "Soil & Irrigation",
+        "icon": "💧",
+        "items": [
+            f"Soil moisture: {soil_pct}% — {soil_status}" if soil_pct else f"Soil: {soil_status}",
+            f"Wet threshold: {wet_threshold}%",
+            f"Valves: {'BOTH OPEN' if irrigation_active else 'Closed'}",
+            f"Morning irrigation: {'⚠ Will SKIP (rain or wet)' if irrigation_skip else '✓ Scheduled for 5:50 AM'}",
+        ],
+    })
+    if irrigation_active:
+        spoken_parts.append("Irrigation is currently running.")
+    elif irrigation_skip:
+        spoken_parts.append(f"Morning irrigation will be skipped — {'rain forecast' if rain_today >= 40 else 'soil is already saturated'}.")
+    else:
+        spoken_parts.append("Irrigation is scheduled for 5:50 AM.")
+
+    # Farm risks (from farm bridge sensors)
+    farm_items = []
+    risk_spoken = []
+    farm_sensors = {
+        "sensor.farm_fungal_risk": ("Fungal risk", "%"),
+        "sensor.farm_frost_risk": ("Frost risk", ""),
+        "sensor.farm_swd_risk": ("SWD pressure", ""),
+        "sensor.farm_spray_window": ("Spray window", ""),
+    }
+    if HA_TOKEN:
+        for eid, (label, unit) in farm_sensors.items():
+            try:
+                s = await ha_get_state(eid)
+                val = s.get("state", "unknown")
+                farm_items.append(f"{label}: {val}{unit}")
+                # Flag high-risk items for spoken briefing
+                if "fungal" in label.lower() and val not in ("unknown", "unavailable"):
+                    try:
+                        if float(val) > 60:
+                            risk_spoken.append(f"fungal risk is high at {val}%")
+                    except Exception:
+                        pass
+                if "spray" in label.lower() and val not in ("unknown", "unavailable", "Closed"):
+                    risk_spoken.append(f"spray window is {val}")
+            except Exception:
+                farm_items.append(f"{label}: unavailable")
+
+    sections.append({"title": "Farm Risks", "icon": "⚠", "items": farm_items})
+    if risk_spoken:
+        spoken_parts.append("Note: " + "; ".join(risk_spoken) + ".")
+
+    # Camera
+    camera_armed = "unknown"
+    if HA_TOKEN:
+        try:
+            cam = await ha_get_state("input_boolean.blink_barn_camera_armed")
+            camera_armed = cam.get("state", "unknown")
+        except Exception:
+            pass
+    sections.append({
+        "title": "Security",
+        "icon": "📷",
+        "items": [f"Barn camera: {'Armed' if camera_armed == 'on' else 'Disarmed' if camera_armed == 'off' else 'Unknown'}"],
+    })
+
+    # Compose full spoken text
+    spoken = "Good morning, Ray. Here's your farm briefing. " + " ".join(spoken_parts)
+    spoken += " Have a great day on the farm."
+
+    return {
+        "sections": sections,
+        "spoken": spoken,
+        "generated_at": datetime.datetime.now().isoformat(),
+    }
+
+
+# ── Farm Knowledge Base ───────────────────────────────────────────────────────
+_farm_knowledge_cache: list[str] = []
+_farm_knowledge_loaded = False
+FARM_KNOWLEDGE_YAML = os.path.join(os.path.dirname(__file__), "..", "farm_knowledge.yaml")
+FARM_KNOWLEDGE_DOCX = os.path.join(os.path.dirname(__file__), "..", "RaysBerryFarmEnhancedPhased.docx")
+
+
+def _yaml_to_chunks(data, prefix: str = "") -> list[str]:
+    """Recursively flatten a YAML dict/list into readable text chunks for LLM context."""
+    chunks = []
+    if isinstance(data, dict):
+        for key, val in data.items():
+            label = f"{prefix}{key.replace('_', ' ').title()}"
+            if isinstance(val, (dict, list)):
+                sub = _yaml_to_chunks(val, prefix=label + " → ")
+                chunks.extend(sub)
+            else:
+                chunks.append(f"{label}: {val}")
+    elif isinstance(data, list):
+        items = [str(i) for i in data if str(i).strip()]
+        if items:
+            chunks.append(f"{prefix.rstrip(' →')}: " + "; ".join(items))
+    else:
+        if str(data).strip():
+            chunks.append(f"{prefix.rstrip(' →')}: {data}")
+    return chunks
+
+
+def _load_farm_knowledge() -> list[str]:
+    """
+    Load curated farm knowledge. Prefers farm_knowledge.yaml (human-curated),
+    falls back to RaysBerryFarmEnhancedPhased.docx if YAML not found.
+    """
+    global _farm_knowledge_cache, _farm_knowledge_loaded
+    if _farm_knowledge_loaded:
+        return _farm_knowledge_cache
+
+    yaml_path = os.path.abspath(FARM_KNOWLEDGE_YAML)
+    if os.path.exists(yaml_path):
+        try:
+            import yaml
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            # Convert top-level sections into searchable text chunks
+            chunks = []
+            for section_key, section_val in (data or {}).items():
+                section_label = section_key.replace("_", " ").title()
+                sub = _yaml_to_chunks(section_val, prefix=section_label + ": ")
+                # Group sub-chunks into one paragraph per top-level section
+                if sub:
+                    chunks.append(f"[{section_label}] " + " | ".join(sub[:20]))
+            _farm_knowledge_cache = [c for c in chunks if len(c) > 20]
+            _farm_knowledge_loaded = True
+            print(f"[knowledge] Loaded {len(_farm_knowledge_cache)} chunks from farm_knowledge.yaml", flush=True)
+            return _farm_knowledge_cache
+        except Exception as e:
+            print(f"[knowledge] YAML load error: {e} — trying .docx fallback", flush=True)
+
+    # Fallback: raw .docx
+    docx_path = os.path.abspath(FARM_KNOWLEDGE_DOCX)
+    if not os.path.exists(docx_path):
+        print("[knowledge] No farm knowledge source found", flush=True)
+        _farm_knowledge_loaded = True
+        return []
+
+    try:
+        import docx as _docx
+        doc = _docx.Document(docx_path)
+        chunks = []
+        current_chunk: list[str] = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+                    current_chunk = []
+            else:
+                current_chunk.append(text)
+                if para.style.name.startswith("Heading") and current_chunk:
+                    chunks.append(" ".join(current_chunk))
+                    current_chunk = []
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+        _farm_knowledge_cache = [c for c in chunks if len(c) > 30]
+        _farm_knowledge_loaded = True
+        print(f"[knowledge] Loaded {len(_farm_knowledge_cache)} chunks from .docx fallback", flush=True)
+    except Exception as e:
+        print(f"[knowledge] Error reading farm doc: {e}", flush=True)
+        _farm_knowledge_loaded = True
+
+    return _farm_knowledge_cache
+
+
+def search_farm_knowledge(query: str, top_n: int = 3) -> list[str]:
+    """Simple keyword search over farm knowledge chunks. Returns most relevant chunks."""
+    chunks = _load_farm_knowledge()
+    if not chunks:
+        return []
+    query_words = set(query.lower().split())
+    scored = []
+    for chunk in chunks:
+        chunk_lower = chunk.lower()
+        score = sum(1 for w in query_words if w in chunk_lower)
+        if score > 0:
+            scored.append((score, chunk))
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [c for _, c in scored[:top_n]]
+
+
+@app.get("/farm/knowledge")
+async def get_farm_knowledge(q: str = ""):
+    """Return farm knowledge chunks. If q is provided, search for relevant chunks."""
+    chunks = _load_farm_knowledge()
+    if not chunks:
+        return {"loaded": False, "chunks": [], "total": 0,
+                "message": "Place RaysBerryFarmEnhancedPhased.docx in the project root to enable."}
+    if q:
+        results = search_farm_knowledge(q)
+        return {"loaded": True, "query": q, "chunks": results, "total": len(chunks)}
+    return {"loaded": True, "chunks": chunks[:10], "total": len(chunks)}
+
+
+@app.post("/farm/knowledge/reload")
+async def reload_farm_knowledge():
+    """Force reload the farm knowledge doc (call after updating the .docx file)."""
+    global _farm_knowledge_loaded
+    _farm_knowledge_loaded = False
+    chunks = _load_farm_knowledge()
+    return {"loaded": len(chunks) > 0, "total": len(chunks)}
 
 
 if __name__ == "__main__":

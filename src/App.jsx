@@ -309,9 +309,12 @@ export default function App() {
   const wakeRafRef = useRef(null);
   // Feature 6: active timers display
   const [activeTimers, setActiveTimers] = useState([]);
-  // Feature 7: daily digest
+  // Feature 7: daily digest (used by decision journal NEW DIGEST button)
   const [digest, setDigest] = useState(null);
   const digestShownRef = useRef(false);
+  // Farm briefing (structured, from /briefing endpoint)
+  const [briefing, setBriefing] = useState(null);
+  const [briefingExpanded, setBriefingExpanded] = useState(false);
   // Feature 3: decisions
   const [decisions, setDecisions] = useState([]);
   const [outcomeInput, setOutcomeInput] = useState({});
@@ -437,12 +440,18 @@ export default function App() {
       .then(d => {
         if (d?.text) {
           setDigest(d);
-          if (lastDigestDay !== today) {
-            localStorage.setItem("sky_digest_day", today);
-          }
+          if (lastDigestDay !== today) localStorage.setItem("sky_digest_day", today);
           digestShownRef.current = true;
         }
       })
+      .catch(() => {});
+  }, []);
+
+  // ── Farm briefing — fetch on load (no auto-play) ──────────────────────────
+  useEffect(() => {
+    fetch(`${API}/briefing`)
+      .then(r => r.json())
+      .then(d => { if (d?.sections) setBriefing(d); })
       .catch(() => {});
   }, []);
 
@@ -1451,17 +1460,45 @@ export default function App() {
                 })}
               </div>
             )}
-            {/* Feature 7: Digest banner */}
-            {digest && (
-              <div style={{ marginTop: '0.75rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)',
-                borderRadius: '6px', padding: '0.5rem 0.6rem' }}>
-                <div style={{ fontSize: '0.6rem', color: 'var(--amber-400)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>Morning Briefing · {digest.date}</div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-bright)', lineHeight: '1.5' }}>{digest.text}</div>
-                <button onClick={() => { if (digest.audio_b64) {
-                  playAudioB64(digest.audio_b64);
-                } else { playTTS(digest.text); }}}
-                  style={{ marginTop: '0.4rem', background: 'transparent', border: '1px solid var(--navy-600)', color: 'var(--text-dim)',
-                    fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer' }}>▶ REPLAY</button>
+            {/* Farm Briefing Panel */}
+            {briefing && (
+              <div style={{ marginTop: '0.75rem', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)',
+                borderRadius: '6px', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '0.4rem 0.6rem', borderBottom: briefingExpanded ? '1px solid rgba(245,158,11,0.15)' : 'none',
+                  cursor: 'pointer' }} onClick={() => setBriefingExpanded(e => !e)}>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--amber-400)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                    📋 Farm Briefing
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+                    <button onClick={e => { e.stopPropagation(); playTTS(briefing.spoken); }}
+                      title="Play briefing aloud"
+                      style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)',
+                        color: 'var(--amber-400)', fontSize: '0.6rem', padding: '1px 6px',
+                        borderRadius: '4px', cursor: 'pointer' }}>▶</button>
+                    <button onClick={e => { e.stopPropagation(); fetch(`${API}/briefing`).then(r=>r.json()).then(d=>{ if(d?.sections) setBriefing(d); }); }}
+                      title="Refresh briefing"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)',
+                        fontSize: '0.65rem', cursor: 'pointer', padding: '0 2px' }}>↻</button>
+                    <span style={{ color: 'var(--text-dim)', fontSize: '0.65rem' }}>{briefingExpanded ? '▲' : '▼'}</span>
+                  </div>
+                </div>
+                {briefingExpanded && briefing.sections.map((sec, i) => (
+                  <div key={i} style={{ padding: '0.35rem 0.6rem', borderBottom: i < briefing.sections.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                    <div style={{ fontSize: '0.58rem', color: 'var(--amber-400)', marginBottom: '0.2rem', letterSpacing: '0.5px' }}>
+                      {sec.icon} {sec.title.toUpperCase()}
+                    </div>
+                    {sec.items.map((item, j) => (
+                      <div key={j} style={{ fontSize: '0.65rem', color: item.startsWith('⚠') || item.startsWith('BOTH') ? '#f87171' : 'var(--text-bright)',
+                        lineHeight: '1.5', paddingLeft: '0.5rem' }}>{item}</div>
+                    ))}
+                  </div>
+                ))}
+                {!briefingExpanded && (
+                  <div style={{ padding: '0.25rem 0.6rem 0.35rem', fontSize: '0.62rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                    {briefing.sections[0]?.items[0] || 'Tap to expand'}
+                  </div>
+                )}
               </div>
             )}
           </div>

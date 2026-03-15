@@ -46,7 +46,7 @@ automation:
     description: >
       Opens both Tuya valve outlets at 5:50 AM if weather is dry and soil needs water.
       Stays on for 2h25m to cover both Rainwave timer cycles (8 zones × 15min).
-      Skips if raining, >40% precipitation probability, or soil already saturated.
+      Skips if raining, >40% rain probability today OR tomorrow, or soil already saturated.
     mode: single
     trigger:
       - platform: time
@@ -57,11 +57,13 @@ automation:
           # Skip if currently raining
           - condition: template
             value_template: "{{ states('weather.home') not in ['rainy', 'pouring'] }}"
-          # Skip if rain probability > 40%
+          # Skip if rain probability > 40% today OR tomorrow (48h look-ahead)
           - condition: template
             value_template: >
-              {{ state_attr('weather.home', 'forecast') is not none and
-                 state_attr('weather.home', 'forecast')[0].precipitation_probability | default(0) < 40 }}
+              {% set f = state_attr('weather.home', 'forecast') %}
+              {{ f is not none and
+                 f[0].precipitation_probability | default(0) < 40 and
+                 f[1].precipitation_probability | default(0) < 60 }}
           # Skip if soil is already wet (above wet threshold from RainPoint)
           - condition: template
             value_template: >
@@ -95,6 +97,41 @@ automation:
           sensor: "input_boolean.tuya_master_valve_1"
           state: "off"
           message: "Both Tuya valve outlets closed — daily irrigation cycle complete (8 zones × 15min)."
+          severity: "info"
+
+  # Closed-loop: stop irrigation if soil moisture reaches wet threshold mid-cycle
+  - id: sky_irrigation_moisture_shutoff
+    alias: "Sky - Irrigation Moisture Shutoff"
+    description: "Closes valves immediately if soil moisture reaches the wet threshold during a watering cycle."
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.rainpoint_soil_moisture
+        above: input_number.rainpoint_wet_threshold
+    condition:
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: input_boolean.tuya_master_valve_1
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.tuya_master_valve_2
+            state: "on"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.tuya_master_valve_1
+            - input_boolean.tuya_master_valve_2
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.rainpoint_soil_moisture"
+          state: "closed_loop_shutoff"
+          message: >
+            Closed-loop shutoff — soil moisture reached
+            {{ states('sensor.rainpoint_soil_moisture') }}%
+            (threshold: {{ states('input_number.rainpoint_wet_threshold') }}%).
+            Both valves closed early to conserve water.
           severity: "info"
 
   # Weather skip notification — let Sky know when irrigation was skipped

@@ -41,3 +41,6 @@ ha-config/
 !ha-config/scripts.yaml
 !ha-config/scenes.yaml
 # ha-packages/ is intentionally NOT ignored — committed HA config packages
+
+# Farm knowledge source doc — too large/binary for repo; curated yaml is committed instead
+RaysBerryFarmEnhancedPhased.docx

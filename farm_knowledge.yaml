@@ -1,0 +1,242 @@
+# Ray's Berry Farm — Curated Knowledge Base
+# Source: RaysBerryFarmEnhancedPhased.docx (distilled to operational facts only)
+# Used by Sky AI to answer farm-specific questions and inform decisions.
+# Update this file as conditions change; run POST /farm/knowledge/reload to refresh.
+
+farm:
+  name: "Ray's Berry Farm"
+  location: "Jersey County, Illinois"
+  soil_type: "Humic-Gley"
+  total_planned_acreage: 5
+  current_acreage: 0.5
+  phase_1_target_acreage: 1
+  currency: "USD"
+
+# ── Blackberry Varieties ──────────────────────────────────────────────────────
+varieties:
+  triple_crown:
+    status: "Active — PRIMARY CROP (~0.5 acre planted, targeting 1 acre)"
+    type: "Semi-erect thornless blackberry"
+    notes: "Off-patent — on-farm propagation is legal. Primary capital-generation variety."
+    first_year_mandate: >
+      Year 1 is establishment only. NO fruit harvest. Pinch all flowers.
+      All plant energy directed to root and cane development ('factory' building).
+      Violating this delays ROI by 1-2 seasons.
+    year_2_expectation: "First substantial harvest from established plants. Generates capital for Phase 2."
+    row_spacing_ft: 10
+    plant_spacing_ft: 3
+    mature_yield_lbs_per_acre: 6000
+    current_status_note: >
+      Currently at ~0.5 acres. Still expanding to reach the 1-acre Phase 1 target
+      before moving to Phase 2. All guidance in this plan is relative to where
+      we are in establishment, not the full 1-acre baseline yet.
+
+  prime_ark_freedom:
+    status: "Planned — SECONDARY CROP (Phase 2)"
+    type: "Erect thornless blackberry"
+    notes: >
+      Off-patent variety. High-chill, early ripening (ripens before Triple Crown),
+      which extends the harvest window and spreads market risk.
+      Good for fresh market — large, firm berries with excellent flavor.
+      Erect growth habit requires less trellis infrastructure than Triple Crown.
+    propagation: "Root cuttings or tip layering (same as Triple Crown)"
+    chill_hours_required: 700
+    harvest_relative_to_triple_crown: "2-3 weeks earlier"
+    advantage: "Harvest window extension + price premium on early-season fruit"
+
+# ── Soil Management ───────────────────────────────────────────────────────────
+soil:
+  type: "Humic-Gley"
+  primary_challenges:
+    - "Prolonged waterlogging → anaerobic conditions → root rot"
+    - "Compacted layers impede root development and drainage"
+    - "Reddish/brownish/yellowish colour pattern in upper layers"
+  solution_raised_beds:
+    height_inches: "8-12"
+    purpose: "Elevate root zone above waterlogging; force excess water into drainage channels"
+    critical: true
+  solution_biochar:
+    purpose: "Permanent structural improvement — porous structure improves aeration and moisture retention"
+    application: "Mix into raised bed substrate at establishment"
+    permanence: "Does not break down unlike compost — lasting benefit"
+    bonus: "If poultry added later: use biochar in bedding to absorb ammonia, then apply charged biochar as nutrient-rich amendment"
+  solution_cover_crops:
+    primary: "Daikon Driller Radish — deep taproot breaks compaction"
+    secondary:
+      - "Buckwheat (soil aeration)"
+      - "Winter rye (organic matter)"
+      - "Clovers (nitrogen fixation)"
+  solution_microbial:
+    inoculant: "Pseudomonas fluorescens"
+    benefit: "Improved yield and fruit quality via flavonoid metabolism enhancement"
+    additional: "Active microbial community eliminates deep compaction layers naturally, stores water for drought"
+  ph_target: "5.5-6.5"
+  organic_matter_target_pct: ">3"
+
+# ── Propagation ───────────────────────────────────────────────────────────────
+propagation:
+  method: "Root cuttings (preferred)"
+  timing: "Late winter — plants dormant"
+  process:
+    - "Excavate pencil-diameter roots"
+    - "Cut into 3-4 inch sections"
+    - "Lay horizontal in sterile medium (50/50 peat moss + perlite)"
+    - "Cover with 0.5-1 inch of medium"
+    - "Maintain 70-75°F"
+    - "Shoots emerge in 4-6 weeks"
+  important: "Use STERILE medium only — soil/compost risks disease transmission"
+  legality: "Triple Crown and Chester are off-patent — on-farm propagation is fully legal"
+
+# ── Irrigation ────────────────────────────────────────────────────────────────
+irrigation:
+  current_system: "Overhead — Tuya dual-zone WiFi timer + 2x Rainwave 4-zone mechanical timers"
+  current_entities:
+    valve_1: "input_boolean.tuya_master_valve_1 (Outlet 1 → Rows 1-4)"
+    valve_2: "input_boolean.tuya_master_valve_2 (Outlet 2 → Rows 5-8)"
+  daily_schedule:
+    gatekeeper_time: "5:50 AM"
+    rainwave_a_start: "6:00 AM"
+    rainwave_b_start: "7:00 AM"
+    zone_duration_minutes: 15
+    total_zones: 8
+  skip_conditions:
+    - "Currently raining or pouring"
+    - "Rain probability today > 40%"
+    - "Rain probability tomorrow > 60%"
+    - "Soil moisture >= wet threshold (default 75%)"
+  closed_loop: "Moisture shutoff automation stops valves if RainPoint hits wet threshold mid-cycle"
+  future_phase_3: "Subsurface Drip Irrigation (SDI) — installed with Year 3-5 capital"
+  water_stress_indicator: "VPD > 2.0 kPa indicates plant stress; check soil moisture and irrigate if below dry threshold"
+  evapotranspiration_note: >
+    Blackberries in Illinois lose approximately 0.15-0.25 inches of water per day
+    during peak summer. Irrigation should replace ET deficit, not just run on schedule.
+
+# ── Cane & Pruning Management ─────────────────────────────────────────────────
+cane_management:
+  year_1:
+    action: "Train primocanes to trellis. Tip at 36-42 inches to encourage lateral branching."
+    fruiting: "NONE — pinch all flowers"
+  year_2_spring:
+    action: "Remove dead floricanes after harvest. Thin to 4-6 healthy canes per plant."
+    pruning_timing: "Late winter/early spring before budbreak"
+  ongoing:
+    lateral_length_max_inches: 18
+    tip_laterals: "In spring when laterals reach 12-18 inches, tip to 12 inches to increase fruit bud sites"
+    dead_cane_removal: "Remove all floricanes (2-year canes that have fruited) immediately after harvest"
+
+# ── Phenology & GDD ──────────────────────────────────────────────────────────
+phenology:
+  base_temp_f: 50
+  gdd_formula: "((Tmax + Tmin) / 2) - 50"
+  stages:
+    dormancy:       { gdd_range: "0",      notes: "Late Nov – Feb. No growth." }
+    budbreak:       { gdd_range: "50-100", notes: "First green tissue visible." }
+    vegetative:     { gdd_range: "100-300",notes: "Rapid cane elongation." }
+    bloom:          { gdd_range: "400-600",notes: "White flowers open. Critical pollination window." }
+    green_fruit:    { gdd_range: "600-900",notes: "Fruit set. Reduce irrigation stress." }
+    ripening:       { gdd_range: "900-1200",notes: "Color development. Monitor SWD daily." }
+    harvest:        { gdd_range: "1100-1400",notes: "Berries ripe 30-45 days post-bloom. Harvest daily." }
+  triple_crown_bloom_typical: "Late May – June (Illinois)"
+  harvest_window_typical: "July – August (Illinois)"
+
+# ── Pest & Disease Management ────────────────────────────────────────────────
+pests:
+  swd:
+    name: "Spotted Wing Drosophila (Drosophila suzukii)"
+    threat_level: "CRITICAL during ripening"
+    peak_risk: "When fruit begins to color (pre-harvest through harvest)"
+    monitoring: "Yellow sticky traps at field edge; check 2x/week during ripening"
+    threshold: "1 adult per trap = spray immediately"
+    preferred_spray: "Spinosad or pyrethrin (low residue, bee-safe window)"
+    spray_timing: "Evening after bee activity stops. Re-entry interval: 4 hours."
+    notes: "Sensor sensor.farm_swd_risk reflects current pressure from weather model"
+
+  fungal:
+    primary_diseases:
+      - "Botrytis (gray mold) — favored by high humidity, cool temps, wet foliage"
+      - "Anthracnose — favored by warm wet conditions during bloom and fruiting"
+      - "Cane blight — enters through pruning wounds"
+    risk_conditions: "Humidity > 85% + temperature 60-75°F for 10+ hours = high fungal risk"
+    prevention:
+      - "Maintain canopy airflow (proper thinning and tipping)"
+      - "Avoid evening irrigation (wet foliage overnight)"
+      - "Apply fungicide at first sign OR when sensor.farm_fungal_risk > 60%"
+    preferred_fungicide: "Captan or copper-based (rotate MOA to prevent resistance)"
+    spray_window: "Use sensor.farm_spray_window. Wind < 10 mph, no rain 4h before/after, temp < 90°F"
+
+  frost:
+    critical_temp_f: 28
+    bloom_damage_temp_f: 32
+    protection: "Cover rows or run overhead if temp drops below 32°F during bloom"
+    sensor: "sensor.farm_frost_risk"
+
+# ── Fertilization ─────────────────────────────────────────────────────────────
+fertilization:
+  year_1:
+    timing: "4-6 weeks after planting"
+    product: "10-10-10 balanced"
+    rate: "0.25 lb per plant"
+    notes: "Do not over-fertilize — excess nitrogen causes vegetative growth at expense of roots"
+  year_2_plus:
+    spring: "Ammonium sulfate — 0.5 lb actual N per plant, apply at budbreak"
+    post_harvest: "Low-nitrogen fertilizer (e.g. 5-10-10) to support cane maturation"
+  soil_test_frequency: "Every 2 years minimum"
+  target_soil_ph: "5.5-6.5 (acidify if needed with elemental sulfur)"
+  potassium_note: "Critical for fruit quality and winter hardiness. Deficiency shows as leaf scorch."
+
+# ── Mulching ──────────────────────────────────────────────────────────────────
+mulch:
+  material: "Wood chips or straw (4-6 inches deep)"
+  benefits:
+    - "Moisture retention — reduces irrigation need ~30%"
+    - "Weed suppression"
+    - "Moderates soil temperature"
+    - "Feeds soil microbes as it breaks down"
+  refresh: "Add 2 inches annually. Never let mulch contact crown (crown rot risk)."
+
+# ── Spray Window Guidance ─────────────────────────────────────────────────────
+spray_window:
+  open_conditions:
+    wind_max_mph: 10
+    temp_max_f: 90
+    temp_min_f: 40
+    no_rain_hours_before: 4
+    no_rain_hours_after: 4
+    avoid_bloom: "Do not apply insecticides when flowers are open (bee kill risk)"
+  sensor: "sensor.farm_spray_window"
+  best_time: "Early morning or evening — lower temps, calmer wind, bees less active"
+
+# ── Farm Phase Roadmap ────────────────────────────────────────────────────────
+phased_plan:
+  current_phase:
+    label: "Phase 1 — In Progress"
+    status: "~0.5 acres Triple Crown planted. Still expanding to 1-acre target."
+    immediate_priorities:
+      - "Expand Triple Crown planting to reach 1-acre target"
+      - "Strictly enforce First-Year Mandate on newly planted stock"
+      - "Build root/cane factory — no fruiting pressure on new plants"
+      - "Continue soil remediation (raised beds, biochar) on remaining acreage"
+
+  phase_1_complete:
+    label: "Phase 1 Complete — The Slingshot"
+    trigger: "1-acre Triple Crown fully established and producing"
+    focus: "First substantial Triple Crown harvest. Generate capital for Phase 2."
+    key_tasks:
+      - "Prune floricanes post-harvest"
+      - "Document yield data — target 6,000 lbs/acre at maturity"
+      - "Begin land prep for Prime Ark Freedom"
+
+  phase_2:
+    label: "Phase 2 — Expansion with Prime Ark Freedom"
+    focus: "Add Prime Ark Freedom as secondary crop. Extend harvest window."
+    key_tasks:
+      - "Plant Prime Ark Freedom (erect, less trellis needed)"
+      - "Stagger harvest: Prime Ark Freedom 2-3 weeks earlier than Triple Crown"
+      - "Install Subsurface Drip Irrigation (SDI) with Phase 1 capital"
+      - "Deploy per-row soil sensors"
+    harvest_window_combined: "Prime Ark Freedom (early July IL) + Triple Crown (late July–Aug IL)"
+
+  phase_3_plus:
+    label: "Phase 3+ — Legacy Farm"
+    focus: "Highly profitable, sustainable, technologically advanced operation."
+    notes: "Model farm / demonstration site. Agritourism and research partnerships."
