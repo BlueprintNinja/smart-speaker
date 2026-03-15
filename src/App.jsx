@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import DeviceGrid from "./DeviceGrid";
 import Dashboard from "./Dashboard";
+import Scheduler from "./Scheduler";
 
 // In Docker (nginx) mode VITE_API is not set — use relative /api so nginx proxies correctly.
 // For local dev, set VITE_API=http://localhost:8000 in your .env file.
@@ -280,7 +281,7 @@ export default function App() {
   const [orbState, setOrbState] = useState("idle"); // idle, listening, thinking, wake
   const [isRecording, setIsRecording] = useState(false);
   const [haStatus, setHaStatus] = useState(null); // null | true | false
-  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory | decisions
+  const [activeTab, setActiveTab] = useState("chat"); // chat | dashboard | memory | decisions | schedule
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
   const [lastHaEvent, setLastHaEvent] = useState(null);
@@ -1288,6 +1289,10 @@ export default function App() {
                   🏠 Open HA Dashboard
                 </a>
               </div>
+            ) : activeTab === 'schedule' ? (
+              <div className="mobile-section-scroll" style={{ padding: 0 }}>
+                <Scheduler api={API} />
+              </div>
             ) : null}
           </div>
 
@@ -1304,6 +1309,9 @@ export default function App() {
             </button>
             <button className={`mobile-tab${activeTab === 'devices' ? ' active' : ''}`} onClick={() => setActiveTab('devices')}>
               <span className="mtab-icon">⚙</span>Devices
+            </button>
+            <button className={`mobile-tab${activeTab === 'schedule' ? ' active' : ''}`} onClick={() => setActiveTab('schedule')}>
+              <span className="mtab-icon">📅</span>Schedule
             </button>
           </div>
         </div>
@@ -1338,6 +1346,7 @@ export default function App() {
             <button className={`tab-btn${activeTab === 'dashboard' ? ' active' : ''}`} onClick={() => setActiveTab('dashboard')}>⊞</button>
             <button className={`tab-btn${activeTab === 'memory' ? ' active' : ''}`} onClick={() => { setActiveTab('memory'); loadMemory(); }}>🧠</button>
             <button className={`tab-btn${activeTab === 'decisions' ? ' active' : ''}`} onClick={() => { setActiveTab('decisions'); loadDecisions(); }}>📋</button>
+            <button className={`tab-btn${activeTab === 'schedule' ? ' active' : ''}`} onClick={() => setActiveTab('schedule')}>📅</button>
           </div>
           <div style={{ padding: '1.5rem', display: sidebarCollapsed ? 'none' : 'block' }}>
             <div className="sidebar-stat" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.3rem' }}>
@@ -1461,7 +1470,11 @@ export default function App() {
         {/* ── Main View ── */}
         <div className="main-view" style={{ flexDirection: 'row' }}>
 
-          {activeTab === 'dashboard' ? (
+          {activeTab === 'schedule' ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <Scheduler api={API} />
+            </div>
+          ) : activeTab === 'dashboard' ? (
             <Dashboard api={API} />
           ) : activeTab === 'decisions' ? (
             /* Feature 3: Decision journal */

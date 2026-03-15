@@ -79,3 +79,46 @@ scene:
         state: "on"
       input_boolean.light_barn:
         state: "on"
+
+  - id: farm_deep_water
+    name: "Farm Deep Water"
+    icon: mdi:water-plus
+    entities:
+      switch.tuya_master_valve_1:
+        state: "on"
+      switch.tuya_master_valve_2:
+        state: "on"
+      input_boolean.irrigation_zone_1:
+        state: "on"
+      input_boolean.irrigation_zone_2:
+        state: "on"
+      input_boolean.irrigation_zone_3:
+        state: "on"
+
+  - id: farm_quick_rinse
+    name: "Farm Quick Rinse"
+    icon: mdi:water-outline
+    entities:
+      switch.tuya_master_valve_1:
+        state: "on"
+      switch.tuya_master_valve_2:
+        state: "on"
+
+  - id: farm_emergency_shutoff
+    name: "Farm Emergency Shutoff"
+    icon: mdi:alert-octagon
+    entities:
+      switch.tuya_master_valve_1:
+        state: "off"
+      switch.tuya_master_valve_2:
+        state: "off"
+      input_boolean.irrigation_zone_1:
+        state: "off"
+      input_boolean.irrigation_zone_2:
+        state: "off"
+      input_boolean.irrigation_zone_3:
+        state: "off"
+      input_boolean.light_barn:
+        state: "off"
+      input_boolean.light_field:
+        state: "off"

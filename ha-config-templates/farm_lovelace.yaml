@@ -178,6 +178,9 @@ views:
           - entity: scene.farm_all_irrigation_off
           - entity: scene.farm_all_off
           - entity: scene.farm_frost_protection
+          - entity: scene.farm_deep_water
+          - entity: scene.farm_quick_rinse
+          - entity: scene.farm_emergency_shutoff
           # Old names (before Farm prefix — HA caches first entity_id)
           - entity: scene.morning_routine
           - entity: scene.evening_mode
@@ -251,6 +254,85 @@ views:
         state_filter:
           - "on"
           - "off"
+
+  - title: Schedule
+    icon: mdi:calendar-clock
+    path: schedule
+    cards:
+      - type: markdown
+        title: Daily Farm Schedule
+        content: >
+          | Time | Event | Entities |
+          |------|-------|----------|
+          | **5:50 AM** | 🌊 Daily Irrigation Gatekeeper | GIEX Valve 1 + 2 |
+          | **5:55 AM** | ⚠ Weather Skip Check | (notification only) |
+          | **6:00 AM** | 🌱 Rainwave A — Rows 1-4 | 4 zones × 15min |
+          | **7:00 AM** | 🌱 Rainwave B — Rows 5-8 | 4 zones × 15min |
+          | **☀ Sunrise-30m** | 💡 Dawn Barn Lights | Barn Light |
+          | **2:00 PM** | 🚫 Midday Safety Shutoff | All irrigation |
+          | **🌙 Sunset+1h** | 💡 Dusk Field Lights Off | Field Light |
+
+      - type: entities
+        title: Irrigation Automations
+        icon: mdi:water-pump
+        entities:
+          - entity: automation.sky_irrigation_daily_gatekeeper
+            name: Daily Gatekeeper (5:50 AM)
+          - entity: automation.sky_irrigation_weather_skip_notify
+            name: Weather Skip Notify (5:55 AM)
+          - entity: automation.sky_midday_irrigation_check
+            name: Midday Shutoff (2:00 PM)
+          - entity: automation.sky_auto_irrigate_low_moisture
+            name: Auto-Irrigate (Low Moisture)
+
+      - type: entities
+        title: Lighting Automations
+        icon: mdi:lightbulb-group
+        entities:
+          - entity: automation.sky_dawn_barn_lights
+            name: Dawn Barn Lights (Sunrise-30m)
+          - entity: automation.sky_dusk_field_lights_off
+            name: Dusk Field Lights Off (Sunset+1h)
+
+      - type: entities
+        title: Safety & Alert Automations
+        icon: mdi:shield-alert
+        entities:
+          - entity: automation.sky_frost_protection
+            name: Frost Protection (Temp < 2°C)
+          - entity: automation.sky_high_fungal_risk
+            name: High Fungal Risk (> 70%)
+
+      - type: entity-filter
+        card:
+          type: entities
+          title: Active Timers
+          icon: mdi:timer-outline
+        show_empty: false
+        entities:
+          - entity: timer.sky_irrigation_zone_1
+          - entity: timer.sky_irrigation_zone_2
+          - entity: timer.sky_irrigation_zone_3
+          - entity: timer.sky_light_barn
+          - entity: timer.sky_light_field
+          - entity: timer.sky_init
+        state_filter:
+          - "active"
+          - "paused"
+          - "idle"
+
+      - type: entities
+        title: Quick Actions
+        icon: mdi:lightning-bolt
+        entities:
+          - entity: scene.farm_deep_water
+            name: Deep Water (All Valves On)
+          - entity: scene.farm_quick_rinse
+            name: Quick Rinse (5min)
+          - entity: scene.farm_emergency_shutoff
+            name: Emergency Shutoff (Everything Off)
+          - entity: script.manual_blackberry_watering
+            name: Manual Watering (30min)
 
   - title: Sky Assistant
     icon: mdi:robot

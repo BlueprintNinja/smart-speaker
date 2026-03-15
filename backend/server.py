@@ -2485,6 +2485,197 @@ def _is_canvas_entity(entity_id: str) -> bool:
     return slug in helpers
 
 
+# ── Farm Schedule endpoint ─────────────────────────────────────────────────────
+# Known farm schedules — built from our automation YAML files
+FARM_SCHEDULES = [
+    {
+        "id": "daily_gatekeeper",
+        "name": "Daily Irrigation Gatekeeper",
+        "entity_id": "automation.sky_irrigation_daily_gatekeeper",
+        "time": "05:50",
+        "duration_min": 145,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "irrigation",
+        "icon": "mdi:water-pump",
+        "color": "#0ea5e9",
+        "description": "Opens both GIEX valve outlets if weather is dry and soil needs water. Holds 2h25m for Rainwave cycles.",
+        "entities": ["switch.tuya_master_valve_1", "switch.tuya_master_valve_2"],
+        "conditions": ["Weather not rainy", "Rain probability < 40%", "Soil below wet threshold"],
+    },
+    {
+        "id": "weather_skip_notify",
+        "name": "Weather Skip Notification",
+        "entity_id": "automation.sky_irrigation_weather_skip_notify",
+        "time": "05:55",
+        "duration_min": 1,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "alert",
+        "icon": "mdi:weather-rainy",
+        "color": "#fbbf24",
+        "description": "Notifies Sky when daily irrigation is skipped due to weather or saturated soil.",
+        "entities": [],
+        "conditions": ["Rainy weather OR rain > 40% OR soil saturated"],
+    },
+    {
+        "id": "midday_shutoff",
+        "name": "Midday Irrigation Safety Shutoff",
+        "entity_id": "automation.sky_midday_irrigation_check",
+        "time": "14:00",
+        "duration_min": 1,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "irrigation",
+        "icon": "mdi:water-off",
+        "color": "#f87171",
+        "description": "Safety check — turns off all irrigation zones by 2 PM to prevent overwatering.",
+        "entities": ["input_boolean.irrigation_zone_1", "input_boolean.irrigation_zone_2", "input_boolean.irrigation_zone_3"],
+        "conditions": ["Any irrigation zone still on"],
+    },
+    {
+        "id": "dawn_barn_lights",
+        "name": "Dawn Barn Lights",
+        "entity_id": "automation.sky_dawn_barn_lights",
+        "time": "sunrise-30",
+        "duration_min": 0,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "lighting",
+        "icon": "mdi:weather-sunset-up",
+        "color": "#f59e0b",
+        "description": "Turns on barn lights 30 minutes before sunrise.",
+        "entities": ["input_boolean.light_barn"],
+        "conditions": [],
+    },
+    {
+        "id": "dusk_field_lights_off",
+        "name": "Dusk Field Lights Off",
+        "entity_id": "automation.sky_dusk_field_lights_off",
+        "time": "sunset+60",
+        "duration_min": 0,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "lighting",
+        "icon": "mdi:weather-sunset-down",
+        "color": "#8b5cf6",
+        "description": "Turns off field lights 1 hour after sunset.",
+        "entities": ["input_boolean.light_field"],
+        "conditions": [],
+    },
+    {
+        "id": "rainwave_a_cycle",
+        "name": "Rainwave A — Rows 1-4",
+        "entity_id": None,
+        "time": "06:00",
+        "duration_min": 60,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "irrigation",
+        "icon": "mdi:sprinkler",
+        "color": "#10b981",
+        "description": "Battery timer — 4 zones × 15min each. Runs only if GIEX valve 1 is open.",
+        "entities": ["switch.tuya_master_valve_1"],
+        "conditions": ["GIEX Valve 1 must be open"],
+    },
+    {
+        "id": "rainwave_b_cycle",
+        "name": "Rainwave B — Rows 5-8",
+        "entity_id": None,
+        "time": "07:00",
+        "duration_min": 60,
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "category": "irrigation",
+        "icon": "mdi:sprinkler",
+        "color": "#10b981",
+        "description": "Battery timer — 4 zones × 15min each. Runs only if GIEX valve 2 is open.",
+        "entities": ["switch.tuya_master_valve_2"],
+        "conditions": ["GIEX Valve 2 must be open"],
+    },
+]
+
+
+@app.get("/schedule")
+async def get_schedule():
+    """
+    Return the farm's complete schedule: known automations + their live HA state.
+    Enriches static schedule data with enabled/disabled status and last_triggered.
+    Also returns active timers and irrigation run history.
+    """
+    enriched = []
+    ha_states_map = {}
+
+    # Fetch live HA states for all automation entities
+    if HA_TOKEN:
+        try:
+            entities = await ha_list_entities("automation")
+            for e in entities:
+                ha_states_map[e["entity_id"]] = {
+                    "state": e.get("state"),
+                    "last_triggered": e.get("attributes", {}).get("last_triggered"),
+                    "friendly_name": e.get("attributes", {}).get("friendly_name"),
+                }
+        except Exception:
+            pass
+
+    for sched in FARM_SCHEDULES:
+        entry = {**sched}
+        eid = sched.get("entity_id")
+        if eid and eid in ha_states_map:
+            ha = ha_states_map[eid]
+            entry["enabled"] = ha["state"] == "on"
+            entry["last_triggered"] = ha.get("last_triggered")
+        elif eid:
+            entry["enabled"] = None  # not found in HA
+            entry["last_triggered"] = None
+        else:
+            entry["enabled"] = True  # hardware timer, always "on"
+            entry["last_triggered"] = None
+        enriched.append(entry)
+
+    # Get active timers
+    timers = []
+    try:
+        timer_entities = await ha_list_entities("timer")
+        for t in timer_entities:
+            if t.get("state") in ("active", "paused"):
+                attrs = t.get("attributes", {})
+                timers.append({
+                    "entity_id": t["entity_id"],
+                    "state": t["state"],
+                    "remaining": attrs.get("remaining"),
+                    "duration": attrs.get("duration"),
+                    "friendly_name": attrs.get("friendly_name", t["entity_id"]),
+                })
+    except Exception:
+        pass
+
+    # Sun times (approximate from HA sun.sun entity)
+    sun_info = {}
+    if HA_TOKEN:
+        try:
+            sun = await ha_get_state("sun.sun")
+            attrs = sun.get("attributes", {})
+            sun_info = {
+                "next_rising": attrs.get("next_rising"),
+                "next_setting": attrs.get("next_setting"),
+            }
+        except Exception:
+            pass
+
+    return {
+        "schedules": enriched,
+        "active_timers": timers,
+        "sun": sun_info,
+        "categories": ["irrigation", "lighting", "alert"],
+    }
+
+
+@app.post("/schedule/toggle")
+async def toggle_schedule(body: dict):
+    """Enable or disable a scheduled automation."""
+    entity_id = body.get("entity_id", "")
+    enable = body.get("enable", True)
+    if not entity_id:
+        return {"error": "entity_id required"}
+    service = "turn_on" if enable else "turn_off"
+    return await ha_call_service("automation", service, entity_id)
+
+
 @app.post("/canvas/sync")
 async def canvas_sync(body: dict):
     """
