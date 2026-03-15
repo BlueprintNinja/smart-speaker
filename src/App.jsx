@@ -328,6 +328,7 @@ export default function App() {
   const [visionImage, setVisionImage] = useState(null); // { dataUrl, b64 }
   const [visionLoading, setVisionLoading] = useState(false);
   const visionInputRef = useRef(null);
+  const visionUploadRef = useRef(null);
   // Feature 3: decisions
   const [decisions, setDecisions] = useState([]);
   const [outcomeInput, setOutcomeInput] = useState({});
@@ -1839,7 +1840,7 @@ export default function App() {
                       onKeyDown={handleKey}
                       disabled={loading || visionLoading}
                     />
-                    {/* Hidden file input — opens camera on iOS, file picker on desktop */}
+                    {/* Camera input — opens rear camera directly on iOS */}
                     <input ref={visionInputRef} type="file" accept="image/*" capture="environment"
                       style={{ display: 'none' }}
                       onChange={e => {
@@ -1854,8 +1855,23 @@ export default function App() {
                         reader.readAsDataURL(file);
                         e.target.value = '';
                       }} />
+                    {/* Gallery/file upload input — photo library on iOS, file picker on desktop */}
+                    <input ref={visionUploadRef} type="file" accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = ev => {
+                          const dataUrl = ev.target.result;
+                          const b64 = dataUrl.split(',')[1];
+                          setVisionImage({ dataUrl, b64 });
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }} />
                     <button
-                      title="Analyze image with Sky vision"
+                      title="Take photo with camera"
                       onClick={() => visionInputRef.current?.click()}
                       disabled={loading || visionLoading}
                       style={{ background: visionImage ? 'rgba(245,158,11,0.2)' : 'var(--navy-800)',
@@ -1864,6 +1880,17 @@ export default function App() {
                         padding: '0 0.6rem', borderRadius: '6px', cursor: 'pointer', fontSize: '1rem',
                         flexShrink: 0 }}>
                       📷
+                    </button>
+                    <button
+                      title="Upload photo from library or files"
+                      onClick={() => visionUploadRef.current?.click()}
+                      disabled={loading || visionLoading}
+                      style={{ background: visionImage ? 'rgba(245,158,11,0.2)' : 'var(--navy-800)',
+                        border: `1px solid ${visionImage ? 'var(--amber-400)' : 'var(--navy-600)'}`,
+                        color: visionImage ? 'var(--amber-400)' : 'var(--text-dim)',
+                        padding: '0 0.6rem', borderRadius: '6px', cursor: 'pointer', fontSize: '1rem',
+                        flexShrink: 0 }}>
+                      🖼️
                     </button>
                     {visionImage
                       ? <button className="send-btn" onClick={() => sendVision(input)} disabled={visionLoading}

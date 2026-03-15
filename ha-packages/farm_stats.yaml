@@ -1,0 +1,93 @@
+# ── Farm Statistics Sensors ───────────────────────────────────────────────────
+# Rolling statistics for soil moisture and GDD tracking.
+# Requires HA recorder to be running (default in Docker setup).
+
+sensor:
+  - platform: statistics
+    name: "Soil Moisture 7-Day Avg"
+    unique_id: "soil_moisture_7d_avg"
+    entity_id: sensor.rainpoint_soil_moisture
+    state_characteristic: mean
+    max_age:
+      days: 7
+    sampling_size: 1000
+    precision: 1
+
+  - platform: statistics
+    name: "Soil Moisture 7-Day Min"
+    unique_id: "soil_moisture_7d_min"
+    entity_id: sensor.rainpoint_soil_moisture
+    state_characteristic: min_value
+    max_age:
+      days: 7
+    sampling_size: 1000
+    precision: 1
+
+  - platform: statistics
+    name: "Soil Moisture 7-Day Max"
+    unique_id: "soil_moisture_7d_max"
+    entity_id: sensor.rainpoint_soil_moisture
+    state_characteristic: max_value
+    max_age:
+      days: 7
+    sampling_size: 1000
+    precision: 1
+
+  - platform: statistics
+    name: "Soil Moisture 24h Avg"
+    unique_id: "soil_moisture_24h_avg"
+    entity_id: sensor.rainpoint_soil_moisture
+    state_characteristic: mean
+    max_age:
+      hours: 24
+    sampling_size: 200
+    precision: 1
+
+  - platform: statistics
+    name: "GDD 7-Day Trend"
+    unique_id: "gdd_7d_trend"
+    entity_id: sensor.farm_gdd
+    state_characteristic: change
+    max_age:
+      days: 7
+    sampling_size: 200
+    precision: 1
+
+template:
+  - sensor:
+      - name: "Soil Moisture Trend"
+        unique_id: "soil_moisture_trend"
+        state: >
+          {% set avg = states('sensor.soil_moisture_7d_avg') | float(-1) %}
+          {% set current = states('sensor.rainpoint_soil_moisture') | float(-1) %}
+          {% if avg < 0 or current < 0 %}
+            Unknown
+          {% elif current > avg + 5 %}
+            Rising
+          {% elif current < avg - 5 %}
+            Falling
+          {% else %}
+            Stable
+          {% endif %}
+        icon: >
+          {% set t = states('sensor.soil_moisture_trend') %}
+          {% if t == 'Rising' %}mdi:trending-up
+          {% elif t == 'Falling' %}mdi:trending-down
+          {% else %}mdi:trending-neutral{% endif %}
+        attributes:
+          current: "{{ states('sensor.rainpoint_soil_moisture') }}%"
+          avg_7d: "{{ states('sensor.soil_moisture_7d_avg') }}%"
+          min_7d: "{{ states('sensor.soil_moisture_7d_min') }}%"
+          max_7d: "{{ states('sensor.soil_moisture_7d_max') }}%"
+
+      - name: "GDD Accumulation Rate"
+        unique_id: "gdd_accumulation_rate"
+        state: >
+          {% set change = states('sensor.gdd_7d_trend') | float(0) %}
+          {{ (change / 7) | round(1) }}
+        unit_of_measurement: "GDD/day"
+        icon: mdi:thermometer-lines
+        attributes:
+          weekly_gain: "{{ states('sensor.gdd_7d_trend') }} GDD"
+          total_gdd: "{{ states('sensor.farm_gdd') }}"
+          growth_stage: "{{ states('sensor.farm_growth_stage') }}"

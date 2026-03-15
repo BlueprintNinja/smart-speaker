@@ -1,0 +1,185 @@
+# ── Farm Calendar & Spray Tracking ───────────────────────────────────────────
+# input_datetime helpers for key farm dates
+# Template sensors compute days-since and days-until
+# Automation reminds Sky when spray window opens and interval is overdue
+
+input_datetime:
+  last_spray_captan:
+    name: "Last Captan Spray"
+    has_date: true
+    has_time: false
+    icon: mdi:spray
+
+  last_spray_sulfur:
+    name: "Last Sulfur Spray"
+    has_date: true
+    has_time: false
+    icon: mdi:spray-bottle
+
+  last_spray_malathion:
+    name: "Last Malathion (SWD) Spray"
+    has_date: true
+    has_time: false
+    icon: mdi:bug-outline
+
+  harvest_start_estimate:
+    name: "Harvest Start Estimate"
+    has_date: true
+    has_time: false
+    icon: mdi:calendar-heart
+
+  last_pruning_date:
+    name: "Last Pruning Date"
+    has_date: true
+    has_time: false
+    icon: mdi:scissors-cutting
+
+  next_trellis_inspection:
+    name: "Next Trellis Inspection"
+    has_date: true
+    has_time: false
+    icon: mdi:fence
+
+template:
+  - sensor:
+      - name: "Days Since Captan Spray"
+        unique_id: "days_since_captan"
+        state: >
+          {% set d = states('input_datetime.last_spray_captan') %}
+          {% if d not in ('unknown', 'unavailable', '') %}
+            {{ (now().date() - strptime(d, '%Y-%m-%d').date()).days }}
+          {% else %}
+            unknown
+          {% endif %}
+        unit_of_measurement: "days"
+        icon: mdi:calendar-clock
+        attributes:
+          last_spray: "{{ states('input_datetime.last_spray_captan') }}"
+          overdue: >
+            {% set d = states('input_datetime.last_spray_captan') %}
+            {% if d not in ('unknown', 'unavailable', '') %}
+              {{ (now().date() - strptime(d, '%Y-%m-%d').date()).days >= 10 }}
+            {% else %}
+              false
+            {% endif %}
+
+      - name: "Days Since SWD Spray"
+        unique_id: "days_since_swd_spray"
+        state: >
+          {% set d = states('input_datetime.last_spray_malathion') %}
+          {% if d not in ('unknown', 'unavailable', '') %}
+            {{ (now().date() - strptime(d, '%Y-%m-%d').date()).days }}
+          {% else %}
+            unknown
+          {% endif %}
+        unit_of_measurement: "days"
+        icon: mdi:bug-outline
+
+      - name: "Days Until Harvest"
+        unique_id: "days_until_harvest"
+        state: >
+          {% set d = states('input_datetime.harvest_start_estimate') %}
+          {% if d not in ('unknown', 'unavailable', '') %}
+            {{ (strptime(d, '%Y-%m-%d').date() - now().date()).days }}
+          {% else %}
+            unknown
+          {% endif %}
+        unit_of_measurement: "days"
+        icon: mdi:calendar-heart
+
+      - name: "Spray Schedule Status"
+        unique_id: "spray_schedule_status"
+        state: >
+          {% set captan_days = states('sensor.days_since_captan_spray') | int(-1) %}
+          {% set spray_window = states('sensor.farm_spray_window') %}
+          {% if spray_window == 'Open' and captan_days >= 10 %}
+            OVERDUE
+          {% elif spray_window == 'Open' and captan_days >= 7 %}
+            Due Soon
+          {% elif spray_window == 'Closed' %}
+            Window Closed
+          {% elif captan_days < 0 %}
+            Not Set
+          {% else %}
+            On Schedule
+          {% endif %}
+        icon: >
+          {% if states('sensor.spray_schedule_status') == 'OVERDUE' %}
+            mdi:alert-circle
+          {% elif states('sensor.spray_schedule_status') == 'Due Soon' %}
+            mdi:alert
+          {% else %}
+            mdi:check-circle
+          {% endif %}
+
+automation:
+  - id: sky_spray_interval_reminder
+    alias: "Sky — Spray Interval Reminder"
+    description: >
+      Alert Sky when spray window is open and it has been 10+ days since
+      last Captan application.
+    trigger:
+      - platform: state
+        entity_id: sensor.farm_spray_window
+        to: "Open"
+      - platform: template
+        value_template: >
+          {{ states('sensor.days_since_captan_spray') | int(0) == 10
+             and states('sensor.farm_spray_window') == 'Open' }}
+    condition:
+      - condition: template
+        value_template: >
+          {{ states('sensor.days_since_captan_spray') | int(0) >= 10
+             and states('sensor.farm_spray_window') == 'Open' }}
+    action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.spray_schedule_status"
+          state: "{{ states('sensor.days_since_captan_spray') }} days since spray"
+          message: >
+            Spray window is open and it has been
+            {{ states('sensor.days_since_captan_spray') }} days since the last
+            Captan application. Recommended interval is 7-10 days. Consider
+            scheduling a spray if weather conditions allow.
+          severity: "warning"
+
+  - id: sky_swd_spray_reminder
+    alias: "Sky — SWD Spray Reminder"
+    description: "Alert when SWD pressure is high and 7+ days since last Malathion spray."
+    trigger:
+      - platform: state
+        entity_id: sensor.farm_swd_risk
+        to: "High"
+    condition:
+      - condition: template
+        value_template: >
+          {{ states('sensor.days_since_swd_spray') | int(999) >= 7 }}
+    action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.farm_swd_risk"
+          state: "High"
+          message: >
+            SWD pressure is high and it has been
+            {{ states('sensor.days_since_swd_spray') }} days since last
+            Malathion application. Consider a targeted SWD spray.
+          severity: "warning"
+
+  - id: sky_harvest_countdown
+    alias: "Sky — Harvest Countdown (7 days out)"
+    description: "Alert 7 days before estimated harvest start."
+    trigger:
+      - platform: template
+        value_template: >
+          {{ states('sensor.days_until_harvest') | int(-1) == 7 }}
+    action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "sensor.days_until_harvest"
+          state: "7"
+          message: >
+            Harvest is estimated to begin in 7 days. Time to check trellis
+            tension, harvest containers, and pre-harvest spray compliance.
+            Last Captan spray was {{ states('sensor.days_since_captan_spray') }}
+            days ago — pre-harvest interval is typically 3 days.
+          severity: "info"

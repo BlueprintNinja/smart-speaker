@@ -1,0 +1,99 @@
+# ── Farm Presence & Activity Tracking ────────────────────────────────────────
+# input_boolean.ray_on_farm — manual or HA Companion GPS-triggered toggle
+# input_select.ray_farm_activity — current task for context-aware briefings
+# Sky reads these to personalize responses and suppress TTS when Ray is away.
+
+input_boolean:
+  ray_on_farm:
+    name: "Ray On Farm"
+    icon: mdi:account-check
+
+input_select:
+  ray_farm_activity:
+    name: "Ray's Farm Activity"
+    options:
+      - "Away"
+      - "General Inspection"
+      - "Irrigation Check"
+      - "Harvesting"
+      - "Spraying"
+      - "Pruning"
+      - "Trellis Work"
+      - "Soil Work"
+    initial: "Away"
+    icon: mdi:account-hard-hat
+
+template:
+  - sensor:
+      - name: "Farm Presence Status"
+        unique_id: "farm_presence_status"
+        state: >
+          {% if is_state('input_boolean.ray_on_farm', 'on') %}
+            {{ states('input_select.ray_farm_activity') }}
+          {% else %}
+            Away
+          {% endif %}
+        icon: >
+          {% if is_state('input_boolean.ray_on_farm', 'on') %}
+            mdi:account-check
+          {% else %}
+            mdi:account-off
+          {% endif %}
+        attributes:
+          on_farm: "{{ is_state('input_boolean.ray_on_farm', 'on') }}"
+          activity: "{{ states('input_select.ray_farm_activity') }}"
+
+automation:
+  - id: sky_ray_arrived_farm
+    alias: "Sky — Ray Arrived at Farm"
+    description: >
+      Triggered when Ray marks himself as on-farm (manually or via HA
+      Companion GPS zone automation). Sends morning briefing context to Sky.
+    trigger:
+      - platform: state
+        entity_id: input_boolean.ray_on_farm
+        to: "on"
+    action:
+      - service: rest_command.sky_alert
+        data:
+          sensor: "farm_presence"
+          state: "arrived"
+          message: >
+            Ray has arrived at the farm. Current growth stage is
+            {{ states('sensor.farm_growth_stage') }}, soil moisture is
+            {{ states('sensor.rainpoint_soil_moisture') }}%,
+            and the spray window is {{ states('sensor.farm_spray_window') }}.
+            {% if states('sensor.spray_schedule_status') == 'OVERDUE' %}
+            Note: Captan spray is overdue — {{ states('sensor.days_since_captan_spray') }} days since last application.
+            {% endif %}
+          severity: "info"
+
+  - id: sky_ray_left_farm
+    alias: "Sky — Ray Left Farm"
+    description: "Reset activity selector when Ray leaves."
+    trigger:
+      - platform: state
+        entity_id: input_boolean.ray_on_farm
+        to: "off"
+    action:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.ray_farm_activity
+        data:
+          option: "Away"
+
+  - id: sky_on_farm_activity_sync
+    alias: "Sky — Sync Activity with Presence"
+    description: "Auto-set on-farm to true if activity is changed to non-Away."
+    trigger:
+      - platform: state
+        entity_id: input_select.ray_farm_activity
+    condition:
+      - condition: template
+        value_template: >
+          {{ trigger.to_state.state != 'Away'
+             and is_state('input_boolean.ray_on_farm', 'off') }}
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ray_on_farm

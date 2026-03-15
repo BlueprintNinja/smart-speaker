@@ -67,6 +67,107 @@ views:
           - entity: sensor.farm_soil_temp
             name: Soil Temp (18cm)
 
+      - type: statistics-graph
+        title: Soil Moisture — 7 Day History
+        icon: mdi:water-percent
+        entities:
+          - entity: sensor.rainpoint_soil_moisture
+            name: RainPoint (live)
+          - entity: sensor.soil_moisture_7d_avg
+            name: 7-Day Avg
+        stat_types:
+          - mean
+          - min
+          - max
+        period:
+          calendar:
+            period: day
+        days_to_show: 7
+
+      - type: statistics-graph
+        title: GDD Accumulation — 14 Days
+        icon: mdi:thermometer-lines
+        entities:
+          - entity: sensor.farm_gdd
+            name: Cumulative GDD
+        stat_types:
+          - mean
+        period:
+          calendar:
+            period: day
+        days_to_show: 14
+
+      - type: entities
+        title: Spray Calendar
+        icon: mdi:spray
+        entities:
+          - entity: sensor.spray_schedule_status
+            name: Schedule Status
+          - entity: sensor.days_since_captan_spray
+            name: Days Since Captan
+          - entity: sensor.days_since_swd_spray
+            name: Days Since SWD Spray
+          - entity: input_datetime.last_spray_captan
+            name: Last Captan Date
+          - entity: input_datetime.last_spray_sulfur
+            name: Last Sulfur Date
+          - entity: input_datetime.last_spray_malathion
+            name: Last Malathion (SWD) Date
+          - entity: automation.sky_spray_interval_reminder
+            name: Spray Reminder Automation
+          - entity: automation.sky_swd_spray_reminder
+            name: SWD Reminder Automation
+
+      - type: entities
+        title: Harvest & Maintenance
+        icon: mdi:calendar-heart
+        entities:
+          - entity: sensor.days_until_harvest
+            name: Days Until Harvest
+          - entity: input_datetime.harvest_start_estimate
+            name: Harvest Start Estimate
+          - entity: input_datetime.last_pruning_date
+            name: Last Pruning Date
+          - entity: input_datetime.next_trellis_inspection
+            name: Next Trellis Inspection
+          - entity: automation.sky_harvest_countdown
+            name: Harvest Countdown Alert
+
+      - type: entities
+        title: Ray — Farm Presence
+        icon: mdi:account-hard-hat
+        entities:
+          - entity: input_boolean.ray_on_farm
+            name: On Farm
+            toggle: true
+          - entity: input_select.ray_farm_activity
+            name: Current Activity
+          - entity: sensor.farm_presence_status
+            name: Presence Status
+          - entity: automation.sky_ray_arrived_farm
+            name: Arrival Briefing
+          - entity: automation.sky_ray_left_farm
+            name: Departure Reset
+
+      - type: entities
+        title: Soil Moisture Statistics
+        icon: mdi:chart-bar
+        entities:
+          - entity: sensor.rainpoint_soil_moisture
+            name: Current
+          - entity: sensor.soil_moisture_24h_avg
+            name: 24h Average
+          - entity: sensor.soil_moisture_7d_avg
+            name: 7-Day Average
+          - entity: sensor.soil_moisture_7d_min
+            name: 7-Day Min
+          - entity: sensor.soil_moisture_7d_max
+            name: 7-Day Max
+          - entity: sensor.soil_moisture_trend
+            name: Trend
+          - entity: sensor.gdd_accumulation_rate
+            name: GDD/day
+
       - type: entities
         title: Blackberry Irrigation (Tuya Master Valve)
         icon: mdi:water-pump
