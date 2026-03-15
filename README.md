@@ -1,6 +1,6 @@
 # Sky — AI Farm Assistant
 
-Voice-driven farm automation assistant for Ray's Berry Farm, powered by:
+Voice-driven farm automation assistant for **Ray's Berry Farm** (Jersey County, IL), powered by:
 - **Whisper** (faster-whisper) — speech-to-text, GPU accelerated with CPU fallback
 - **Ollama** — local LLM with structured command extraction (supports thinking models)
 - **Kokoro TTS** (`af_sky` voice) — text-to-speech, auto-downloads on first run
@@ -8,8 +8,16 @@ Voice-driven farm automation assistant for Ray's Berry Farm, powered by:
 - **Device Grid** — live farm device cards with HA sync status and manual ON/OFF toggles
 - **Farm Bridge** — real-time farm intelligence from Open-Meteo + NWS weather data
 - **Scheduler** — visual daily/weekly farm automation schedule with live HA state
+- **Farm Knowledge Base** — curated agronomic knowledge injected into Sky's context per query
+- **Morning Briefing** — structured daily sidebar panel (weather, soil, irrigation status, risks, security)
 
 > For full physical and software setup instructions see **[SETUP.md](./SETUP.md)**
+
+### Current Farm Status
+- **Primary crop:** Triple Crown blackberry — ~0.5 acres planted, expanding to 1-acre Phase 1 target
+- **Secondary crop (planned):** Prime Ark Freedom — erect thornless, ripens 2–3 weeks earlier than Triple Crown
+- **Soil:** Humic-Gley — raised beds (8–12"), biochar amendment, Daikon cover crop for compaction
+- **Irrigation:** Tuya dual-zone WiFi valve → 2× Rainwave 4-zone timers → 8 rows (auto-gatekeeper at 5:50 AM)
 
 ---
 
@@ -130,8 +138,14 @@ Sky's persistent farm log — survives container restarts:
 Tracks Sky's farm recommendations and their outcomes:
 - Sky auto-logs recommendations from chat (spray, irrigate, frost protection, etc.)
 - Log outcomes against each recommendation to build a feedback loop
-- **Morning Digest** — auto-generated briefing on page load, replayable via TTS
-- Manual digest trigger button
+- **↻ New Digest** — manually trigger a fresh LLM-generated farm digest
+
+### Sidebar Briefing Panel
+The left sidebar shows a **Farm Briefing** panel that loads on startup (no auto-play):
+- **📋 Farm Briefing** — collapsible card with live sections: Weather · Soil & Irrigation · Farm Risks · Security
+- **▶ Play** — sends the full spoken briefing to TTS on demand
+- **↻ Refresh** — re-fetches live data from HA at any time
+- Collapsed state shows a one-line weather preview
 
 ### Device Grid (⚙ SHOW DEVICES)
 
@@ -227,7 +241,8 @@ All HA configuration is in `ha-packages/` — see [SETUP.md](./SETUP.md) for ful
 
 Key files:
 - **`smart_speaker_helpers.yaml`** — input_boolean + timer helpers, timer auto-off automation, REST command
-- **`master_valve_irrigation.yaml`** — GIEX dual-zone valve, daily gatekeeper, weather-skip, manual watering script
+- **`master_valve_irrigation.yaml`** — GIEX dual-zone valve, daily gatekeeper (48h rain look-ahead), closed-loop moisture shutoff, weather-skip notify, manual watering script
+- **`blink_camera.yaml`** — Blink barn camera placeholder: `input_boolean.blink_barn_camera_armed`, template status sensor, motion binary sensor, auto-arm/disarm at dusk/dawn
 - **`farm_scenes.yaml`** — all farm scenes including Deep Water, Quick Rinse, Emergency Shutoff
 - **`farm_automations_advanced.yaml`** — auto-irrigate, frost protection, dawn/dusk lights, fungal risk
 - **`farm_bridge_automations.yaml`** — HA automations that POST to `/alert` when farm sensor thresholds are crossed
@@ -308,14 +323,33 @@ esphome run ha-packages\esphome-ble-proxy.yaml
 
 ---
 
-## Farm Intelligence (Sky's Proactive Alerts)
+## Farm Intelligence
 
+### Proactive Alerts
 - **Every 10 minutes:** Farm data (Open-Meteo + NWS) fetched and injected into LLM context
 - **Critical alerts:** Frost risk, SWD pressure, NWS alerts trigger immediate spoken briefings
-- **Morning digest:** Auto-generated farm briefing on page load with TTS replay
-- **Dashboard:** Live color-coded farm insights cards
+- **Dashboard:** Live color-coded farm insights cards (fungal risk, frost, SWD, spray window, GDD, VPD)
 - **HA automations:** `farm_bridge_automations.yaml` POSTs to `/alert` on threshold crossings → Sky speaks + logs to Memory
 - **Alert polling:** Frontend checks for new alerts every 30 seconds
+
+### Morning Briefing
+Fetched automatically on page load from `GET /briefing` — **no auto-play**:
+- Live data assembled from HA (weather forecast, soil moisture, valve state, farm risk sensors, camera status)
+- **Play button** speaks the briefing via Kokoro TTS on demand
+- **48-hour rain look-ahead** determines whether morning irrigation will be skipped
+
+### Irrigation Intelligence
+- **Daily gatekeeper** (5:50 AM) — skips if raining, today's rain probability > 40%, *or tomorrow's probability > 60%*
+- **Closed-loop moisture shutoff** — `sky_irrigation_moisture_shutoff` automation stops both valves mid-cycle the moment soil moisture hits the wet threshold, conserving water
+- **Manual override** — `script.manual_blackberry_watering` runs both zones for a configurable duration
+
+### Farm Knowledge Base
+`farm_knowledge.yaml` in the project root is loaded by the backend at startup and searched per-query to inject the 2 most relevant chunks into Sky's context:
+- Edit `farm_knowledge.yaml` directly to update agronomic facts, thresholds, or the farm plan
+- Force a reload without restarting: `POST /farm/knowledge/reload`
+- Query the knowledge base directly: `GET /farm/knowledge?q=your+question`
+
+Key knowledge sections: varieties · soil management · propagation · irrigation · cane & pruning · phenology/GDD · pest & disease · fertilization · mulch · spray window · phased farm roadmap
 
 ### Testing an Alert Manually
 
@@ -353,7 +387,10 @@ FastAPI Backend (Docker, GPU, port 8000)
     ├── /alerts/timers      → Active timer list
     ├── /alerts/pending     → Pending alert queue
     ├── /farm/prime         → Open-Meteo + NWS farm data injection
-    ├── /digest             → Morning briefing (cached daily)
+    ├── /briefing           → Structured daily farm briefing (live HA data, no auto-play)
+    ├── /farm/knowledge     → Curated farm knowledge retrieval (YAML-backed)
+    ├── /farm/knowledge/reload → Force-reload farm_knowledge.yaml without restart
+    ├── /digest             → LLM-generated morning digest (cached daily)
     └── /persona            → GET/PUT assistant persona settings
     │
     ├──→ Ollama (native on host, GPU)         host.docker.internal:11434
