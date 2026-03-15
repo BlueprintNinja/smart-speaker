@@ -616,6 +616,10 @@ async def ha_call_service(domain: str, service: str, entity_id: str, extra: dict
     if not HA_TOKEN:
         return {"error": "HA_TOKEN not configured"}
 
+    # Normalize incorrect service names the LLM sometimes emits
+    if domain == "script" and service == "execute":
+        service = "turn_on"
+
     # Canvas virtual entities — rewrite to the real input_boolean helper
     if entity_id and _is_canvas_entity(entity_id):
         helpers = _load_canvas_helpers()
@@ -950,9 +954,21 @@ async def schedule_timer(entity_id: str, minutes: float, domain: str) -> str:
     mins = int(minutes % 60)
     secs = int((minutes * 60) % 60)
     duration_str = f"{hours:02d}:{mins:02d}:{secs:02d}"
-    await _ha_create_timer(slug, duration_str)
+    create_result = await _ha_create_timer(slug, duration_str)
 
-    # Start the timer
+    # States-API fallback entities are fake sensors — timer.start won't work on them.
+    # Skip straight to APScheduler so the auto-off actually fires.
+    if create_result == "states_fallback":
+        job_id = f"timer_{entity_id}_{int(time.time())}"
+        run_at = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
+        scheduler.add_job(
+            _timer_auto_off_fallback, "date", run_date=run_at,
+            args=[entity_id, domain], id=job_id, replace_existing=True,
+        )
+        print(f"[timer] states_fallback — APScheduler job {job_id} for {entity_id} in {minutes}min", flush=True)
+        return job_id
+
+    # Start the real HA-native timer
     started = await _ha_start_timer(slug, minutes)
     if started:
         print(f"[timer] HA-native timer {timer_eid} running for {minutes}min → auto-off {entity_id}", flush=True)
