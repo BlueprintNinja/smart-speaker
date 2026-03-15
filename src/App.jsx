@@ -324,6 +324,10 @@ export default function App() {
   const [briefingExpanded, setBriefingExpanded] = useState(false);
   // Latest farm intelligence brief (from primeFarm criticals — shown in sidebar, NOT chat)
   const [farmBrief, setFarmBrief] = useState(null);
+  // Vision — image analysis via qwen3.5 native vision
+  const [visionImage, setVisionImage] = useState(null); // { dataUrl, b64 }
+  const [visionLoading, setVisionLoading] = useState(false);
+  const visionInputRef = useRef(null);
   // Feature 3: decisions
   const [decisions, setDecisions] = useState([]);
   const [outcomeInput, setOutcomeInput] = useState({});
@@ -455,6 +459,30 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  // ── Vision — send image to /vision endpoint ─────────────────────────────
+  const sendVision = useCallback(async (prompt = '') => {
+    if (!visionImage || visionLoading) return;
+    setVisionLoading(true);
+    const displayPrompt = prompt || 'Analyze this farm image';
+    setMessages(prev => [...prev, { role: 'user', text: `📷 ${displayPrompt}` }]);
+    try {
+      const r = await fetch(`${API}/vision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_b64: visionImage.b64, prompt }),
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      setMessages(prev => [...prev, { role: 'bot', text: data.text }]);
+      if (data.audio_b64) playAudioB64(data.audio_b64);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'bot', text: `Vision error: ${e.message}` }]);
+    } finally {
+      setVisionLoading(false);
+      setVisionImage(null);
+    }
+  }, [visionImage, visionLoading]);
 
   // ── Farm briefing — fetch on load (no auto-play) ──────────────────────────
   useEffect(() => {
@@ -1805,16 +1833,62 @@ export default function App() {
                     <textarea
                       className="text-input"
                       rows={1}
-                      placeholder="Enter command or manual query..."
+                      placeholder={visionImage ? 'Ask about this image (or leave blank)...' : 'Enter command or manual query...'}
                       value={input}
                       onChange={e => setInput(e.target.value)}
                       onKeyDown={handleKey}
-                      disabled={loading}
+                      disabled={loading || visionLoading}
                     />
-                    <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
-                      SEND
+                    {/* Hidden file input — opens camera on iOS, file picker on desktop */}
+                    <input ref={visionInputRef} type="file" accept="image/*" capture="environment"
+                      style={{ display: 'none' }}
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = ev => {
+                          const dataUrl = ev.target.result;
+                          const b64 = dataUrl.split(',')[1];
+                          setVisionImage({ dataUrl, b64 });
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }} />
+                    <button
+                      title="Analyze image with Sky vision"
+                      onClick={() => visionInputRef.current?.click()}
+                      disabled={loading || visionLoading}
+                      style={{ background: visionImage ? 'rgba(245,158,11,0.2)' : 'var(--navy-800)',
+                        border: `1px solid ${visionImage ? 'var(--amber-400)' : 'var(--navy-600)'}`,
+                        color: visionImage ? 'var(--amber-400)' : 'var(--text-dim)',
+                        padding: '0 0.6rem', borderRadius: '6px', cursor: 'pointer', fontSize: '1rem',
+                        flexShrink: 0 }}>
+                      📷
                     </button>
+                    {visionImage
+                      ? <button className="send-btn" onClick={() => sendVision(input)} disabled={visionLoading}
+                          style={{ background: 'rgba(245,158,11,0.25)', borderColor: 'var(--amber-400)', color: 'var(--amber-400)' }}>
+                          {visionLoading ? '...' : 'ASK'}
+                        </button>
+                      : <button className="send-btn" onClick={() => sendText(input)} disabled={!input.trim() || loading}>
+                          SEND
+                        </button>
+                    }
                   </div>
+                  {/* Vision image preview */}
+                  {visionImage && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem',
+                      background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)',
+                      borderRadius: '6px', padding: '0.35rem 0.5rem' }}>
+                      <img src={visionImage.dataUrl} alt="preview"
+                        style={{ height: '48px', width: '48px', objectFit: 'cover', borderRadius: '4px', flexShrink: 0 }} />
+                      <div style={{ flex: 1, fontSize: '0.6rem', color: 'var(--amber-400)' }}>
+                        Image ready — type a question or tap ASK for farm analysis
+                      </div>
+                      <button onClick={() => setVisionImage(null)}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '0.8rem', flexShrink: 0 }}>✕</button>
+                    </div>
+                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem', paddingLeft: '0.25rem' }}>
                     <button onClick={() => setDeepThink(p => !p)}
                       style={{ background: deepThink ? 'rgba(168,85,247,0.15)' : 'transparent',

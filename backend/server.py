@@ -1289,6 +1289,61 @@ def _is_action_request(msg: str) -> bool:
     return has_duration
 
 
+@app.post("/vision")
+async def vision_analyze(body: dict):
+    """
+    Send an image + prompt to qwen3.5's native vision capability.
+    Body: { image_b64: str, prompt: str (optional) }
+    Returns: { text: str, audio_b64: str|None }
+    """
+    image_b64 = (body.get("image_b64") or "").strip()
+    user_prompt = (body.get("prompt") or "").strip()
+    if not image_b64:
+        return {"error": "image_b64 required"}
+
+    # Strip data-URI prefix if present (data:image/jpeg;base64,...)
+    if "," in image_b64:
+        image_b64 = image_b64.split(",", 1)[1]
+
+    if not user_prompt:
+        user_prompt = (
+            "You are Sky, Ray's farm AI assistant. Analyze this image in the context of "
+            "Ray's Berry Farm (Triple Crown blackberry, Jersey County IL). "
+            "Describe what you see and any farm-relevant observations: plant health, "
+            "pest or disease signs, berry ripeness, soil condition, weather, or security concerns. "
+            "Be concise — 2-3 sentences, conversational, no bullet points."
+        )
+
+    messages = [
+        {
+            "role": "user",
+            "content": user_prompt,
+            "images": [image_b64],
+        }
+    ]
+
+    loop = asyncio.get_event_loop()
+    try:
+        def _gen():
+            return "".join(_ollama_chat_stream(messages, {"temperature": 0.3, "num_predict": 256}))
+        raw = await loop.run_in_executor(None, _gen)
+        text = _strip_think_blocks(raw).strip()
+        text = _strip_markdown_for_tts(text)
+    except Exception as e:
+        return {"error": f"Vision inference failed: {e}"}
+
+    # TTS
+    audio_b64 = None
+    try:
+        async with GPU_LOCK:
+            wav_bytes, _ = await loop.run_in_executor(None, lambda: synth_wav_bytes(text))
+        audio_b64 = base64.b64encode(wav_bytes).decode()
+    except Exception:
+        pass
+
+    return {"text": text, "audio_b64": audio_b64}
+
+
 @app.post("/chat")
 async def chat(body: dict):
     t_start = time.time()
